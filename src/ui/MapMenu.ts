@@ -85,6 +85,8 @@ export class MapMenu extends Screen {
   /** Call every frame while open. (px, pz) = player; (fx, fz) = facing direction. */
   /** Show ore deposits (needs the Ore Scanner). */
   showOre = false;
+  /** Friends in your lobby, drawn on the map with their names. */
+  friends: { name: string; color: number; x: number; z: number }[] = [];
 
   update(dt: number, planet: Planet, px: number, pz: number, fx: number, fz: number): void {
     this.timer += dt;
@@ -152,6 +154,25 @@ export class MapMenu extends Screen {
         ctx.translate(cx + dx * s, cy + dz * s); ctx.rotate(Math.atan2(dz, dx));
         ctx.fillStyle = '#6fe8ff'; ctx.beginPath(); ctx.moveTo(18, 0); ctx.lineTo(-12, 13); ctx.lineTo(-6, 0); ctx.lineTo(-12, -13); ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#06323a'; ctx.stroke();
         ctx.rotate(-Math.atan2(dz, dx)); ctx.fillStyle = '#6fe8ff'; ctx.font = 'bold 18px monospace'; ctx.textAlign = 'center'; ctx.fillText(`HUB ${Math.round(dist)} m`, 0, dx * s > 0 ? -22 : 34);
+      }
+      ctx.restore();
+    }
+
+    // friends: a coloured dot with their name, or an arrow on the edge pointing toward them when they are off the map
+    for (const f of this.friends) {
+      const dx = f.x - px, dz = f.z - pz, dist = Math.hypot(dx, dz), cx = MAP.x + MAP.s / 2, cy = MAP.y + MAP.s / 2;
+      const sx = cx + dx * k, sy = cy + dz * k, inside = Math.abs(sx - cx) < MAP.s / 2 - 8 && Math.abs(sy - cy) < MAP.s / 2 - 8;
+      const col = '#' + f.color.toString(16).padStart(6, '0');
+      ctx.save(); ctx.textAlign = 'center'; ctx.font = 'bold 17px monospace';
+      if (inside) {
+        ctx.fillStyle = col; ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = 'rgba(8,12,24,0.75)'; const tw = ctx.measureText(f.name).width + 10; ctx.fillRect(sx - tw / 2, sy - 34, tw, 21);
+        ctx.fillStyle = '#fff'; ctx.fillText(f.name, sx, sy - 18);
+      } else {
+        const e = MAP.s / 2 - 26, s = e / Math.max(Math.abs(dx), Math.abs(dz), 1e-3), ang = Math.atan2(dz, dx);
+        ctx.translate(cx + dx * s, cy + dz * s); ctx.rotate(ang);
+        ctx.fillStyle = col; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(18, 0); ctx.lineTo(-12, 13); ctx.lineTo(-6, 0); ctx.lineTo(-12, -13); ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.rotate(-ang); ctx.fillStyle = '#fff'; ctx.fillText(`${f.name} ${Math.round(dist)} m`, dx * s > 0 ? -48 : 48, dz * s > 0 ? -22 : 34);
       }
       ctx.restore();
     }

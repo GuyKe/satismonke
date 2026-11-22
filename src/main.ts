@@ -4,7 +4,7 @@ import { CollisionWorld } from './physics/CollisionWorld';
 import { GorillaPlayer } from './player/GorillaPlayer';
 import { ArmCalibration } from './player/ArmCalibration';
 import { buildCapsule } from './world/Capsule';
-import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER, ORE_OWNER, MACHINE_OWNER, CRASH_OWNER, Loot } from './world/Planet';
+import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER, ORE_OWNER, MACHINE_OWNER, CRASH_OWNER, Loot, Harvest } from './world/Planet';
 import { BuildSystem, Plan, Piece, PieceType, PALETTE, COST as BUILD_COST, COLOR_COST, geometry as pieceGeometry } from './world/BuildSystem';
 import { BuildPanel } from './ui/BuildPanel';
 import { Narrator, LINES, Line } from './ui/Narrator';
@@ -246,6 +246,7 @@ async function boot() {
   const hookPlanet = (pl: Planet) => {
     pl.onRoar = (pos, kind) => { sfx.roar(pos, kind); chat(kind === 'serpent' ? 'roar_serpent' : kind === 'manta' ? 'roar_manta' : 'creature', 90, true); };
     pl.onTreeLanded = pos => sfx.thump(pos);
+    pl.onHarvest = (k, i) => net.sendWorld(k, i);
     pl.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); progress.treesFelled++; sfx.pickup(); toast(`+${k} wood`, pos); first('firstWood'); if (progress.treesFelled % 6 === 0) chat('chop', 40, true); if (progress.items.wood >= 50) first('milestoneWood'); };
     pl.onStone = (n, pos) => { const k = n + (progress.has('ironpick') ? 2 : progress.has('pickaxe') ? 1 : 0); progress.add('stone', k); progress.bouldersBroken++; sfx.crumble(); toast(`+${k} stone`, pos); first('firstStone'); if (progress.bouldersBroken % 5 === 0) chat('rock', 40, true); };
     pl.onCrystal = (n, pos) => { progress.add('crystal', n); sfx.crumble(); sfx.pickup(); toast(`+${n} crystal`, pos); first('firstCrystal'); };
@@ -370,6 +371,7 @@ async function boot() {
   net.onChange = refreshLobby;
   net.onPose = (id, p) => remotes.pose(id, p);
   net.onLeave = id => remotes.remove(id);
+  net.onWorld = (k, i) => planet?.applyRemote(k as Harvest, i);
   net.onClock = c => { if (planet && Math.abs(planet.clock - c) > 1.5) planet.clock = c; };
   net.getClock = () => planet?.clock ?? 40;
   net.onStart = clock => { if (appMode !== 'game' || currentSlot >= 0) beginMultiplayer(clock); };
@@ -378,9 +380,9 @@ async function boot() {
     resetGame();
     currentSlot = -1; appMode = 'game'; menuRoom.group.visible = false; autosave = 0; playSeconds = 0;
     startPlanet(null); story.phase = 'planet';
-    if (planet) planet.clock = clock;
+    if (planet) { planet.clock = clock; for (const [k, i] of net.worldLog) planet.applyRemote(k as Harvest, i); }
     // spread friends out a little so nobody lands inside anyone else
-    const idx = Math.max(0, net.list.findIndex(p => p.id === net.me.id));
+    const idx = Math.max(0, net.list.map(p => p.id).sort().indexOf(net.me.id));
     player.teleport(new THREE.Vector3(Math.cos(idx * 1.3) * idx * 2.5, 0.1, Math.sin(idx * 1.3) * idx * 2.5));
     refreshLobby();
   };
@@ -847,7 +849,7 @@ async function boot() {
       const target = headW.clone().addScaledVector(fwd, floating === 'map' ? 1.05 : 0.85); target.y = headW.y - 0.1;
       panel.position.lerp(target, 1 - Math.exp(-8 * dt));
       panel.lookAt(headW);
-      if (floating === 'map') map.update(dt, planet, headW.x, headW.z, fwd.x, fwd.z); else craftPanel.update();
+      if (floating === 'map') { map.friends = remotes.positions; map.update(dt, planet, headW.x, headW.z, fwd.x, fwd.z); } else craftPanel.update();
     }
     if (hubUi) { hubUi.bench.update(); hubUi.computer.update(dt); hubUi.upgrades.update(); hubUi.research.update(); }
 
@@ -957,7 +959,7 @@ async function boot() {
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    health, narrator, net, remotes, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    health, narrator, net, remotes, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
     get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },

@@ -5,6 +5,7 @@ import { PlayerModel } from './PlayerModel';
 
 class Avatar {
   readonly model: PlayerModel;
+  readonly info: PlayerInfo;
   readonly tag: THREE.Sprite;
   readonly head = new THREE.Vector3(); readonly q = new THREE.Quaternion(); readonly l = new THREE.Vector3(); readonly r = new THREE.Vector3();
   readonly target = { head: new THREE.Vector3(), q: new THREE.Quaternion(), l: new THREE.Vector3(), r: new THREE.Vector3() };
@@ -12,6 +13,7 @@ class Avatar {
   private e = new THREE.Euler();
 
   constructor(info: PlayerInfo) {
+    this.info = info;
     this.model = new PlayerModel(info.color);
     const c = document.createElement('canvas'); c.width = 256; c.height = 64;
     const g = c.getContext('2d')!; g.fillStyle = 'rgba(8,12,24,0.7)'; g.fillRect(0, 0, 256, 64);
@@ -55,6 +57,10 @@ export class RemotePlayers {
 
   remove(id: string): void { const a = this.avatars.get(id); if (!a) return; this.group.remove(a.model.group); disposeObject(a.model.group); this.avatars.delete(id); }
   clear(): void { for (const id of [...this.avatars.keys()]) this.remove(id); this.infos.clear(); }
+  /** Where your friends are (for the map). */
+  get positions(): { name: string; color: number; x: number; z: number }[] {
+    return [...this.avatars.values()].filter(a => a.seen).map(a => ({ name: a.info.name, color: a.info.color, x: a.head.x, z: a.head.z }));
+  }
   get count(): number { return this.avatars.size; }
   update(dt: number): void { const k = 1 - Math.exp(-14 * dt); for (const a of this.avatars.values()) a.step(k, dt); }
 }
