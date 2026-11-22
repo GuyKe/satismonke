@@ -24,7 +24,7 @@ import { ResourceHud, ObjectiveHud } from './ui/Hud';
 import { Progress, RECIPES, POD_HITS, POD_STEEL, BOULDER_HITS, TREE_HITS, CRYSTAL_HITS, MAX_PLACED } from './game/Progress';
 import { Story } from './game/Story';
 import { Sfx } from './audio/Sfx';
-import { loadSettings } from './settings';
+import { loadSettings, saveSettings } from './settings';
 
 const PLANET_GRAVITY_G = 0.6;
 
@@ -63,7 +63,7 @@ async function boot() {
   if (debugSkip !== 'planet') {
     await new Promise(r => setTimeout(r, 40));
     try {
-      const snapPlanet = new Planet();
+      const snapPlanet = new Planet(7, settings.graphics);
       scene.add(snapPlanet.group);
       slides = await takeSnapshots(renderer, scene, snapPlanet);
       scene.remove(snapPlanet.group); disposeObject(snapPlanet.group);
@@ -73,6 +73,7 @@ async function boot() {
   loadingDom.remove();
 
   const sfx = new Sfx();
+  sfx.setVolume(settings.volume);
   renderer.xr.addEventListener('sessionstart', () => sfx.ensure());
   addEventListener('pointerdown', () => sfx.ensure());
 
@@ -201,7 +202,7 @@ async function boot() {
 
   /** Land on the planet: a fresh landing (d = null) or a loaded save. */
   const startPlanet = (d: SaveData | null) => {
-    const pl = new Planet(); planet = pl;
+    const pl = new Planet(7, d?.planet?.quality ?? settings.graphics); planet = pl;
     ship.visible = false;
     scene.add(pl.group);
     player.world = pl.world;
@@ -228,7 +229,7 @@ async function boot() {
   const saveGame = (): boolean => {
     const onPlanet = !!planet && (story.phase === 'planet' || story.phase === 'landing');
     const d: SaveData = {
-      version: 1, savedAt: Date.now(), playSeconds: Math.round(playSeconds),
+      version: 2, savedAt: Date.now(), playSeconds: Math.round(playSeconds),
       phase: onPlanet ? 'planet' : 'capsule', objective: onPlanet ? progress.objective()[0] : 'In the pod',
       progress: progress.toJSON(), player: { x: player.position.x, y: player.position.y, z: player.position.z },
       planet: onPlanet ? planet!.exportState() : null,
@@ -299,11 +300,17 @@ async function boot() {
     onResume: () => togglePause(false),
     onSave: () => pausePanel.flash(saveGame() ? 'Game saved' : 'Could not save'),
     onMainMenu: () => enterMainMenu(true),
+    onSettings: () => {
+      saveSettings(settings); sfx.setVolume(settings.volume);
+      renderer.setPixelRatio(settings.graphics === 'low' ? 1 : Math.min(devicePixelRatio, 2));
+      renderer.setSize(innerWidth, innerHeight);
+    },
+    onResetArms: () => { settings.armSpan = 0; saveSettings(settings); },
   };
-  const mainPanel = new MenuPanel('main', handlers, 2.0);
+  const mainPanel = new MenuPanel('main', handlers, settings, 2.0);
   mainPanel.mesh.position.set(0, 1.05, -1.7);
   menuRoom.group.add(mainPanel.mesh);
-  const pausePanel = new MenuPanel('pause', handlers, 1.1);
+  const pausePanel = new MenuPanel('pause', handlers, settings, 1.1);
   pausePanel.mesh.visible = false;
   scene.add(pausePanel.mesh);
 
@@ -544,7 +551,7 @@ async function boot() {
       hoverTarget[pointer] = hit ? targets[hit.index] : null;
       if (hit && hubUi && targets[hit.index] === hubUi.bench) progress.benchOpened = true;
     };
-    if (inXR) lasers.forEach((l, i) => setHover(i, l.castMany(meshes, !!placing)));
+    if (inXR) lasers.forEach((l, i) => setHover(i, l.castMany(meshes, !!placing || settings.laserAlways)));
     else {
       lasers.forEach(l => l.hide());
       mouseRay.setFromCamera(mouse, camera);
@@ -580,7 +587,7 @@ async function boot() {
     }
     if (floating && planet) {
       const panel = floating === 'map' ? map.mesh : craftPanel.mesh;
-      const target = headW.clone().addScaledVector(fwd, 0.85); target.y = headW.y - 0.1;
+      const target = headW.clone().addScaledVector(fwd, floating === 'map' ? 1.05 : 0.85); target.y = headW.y - 0.1;
       panel.position.lerp(target, 1 - Math.exp(-8 * dt));
       panel.lookAt(headW);
       if (floating === 'map') map.update(dt, planet, headW.x, headW.z, fwd.x, fwd.z); else craftPanel.update();

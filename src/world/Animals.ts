@@ -21,6 +21,16 @@ export interface Animal {
   /** Smoothed head angles and roar bookkeeping, owned by Planet. */
   look: { yaw: number; pitch: number; away: boolean; timer: number; ay: number; ap: number };
   roar: { timer: number; next: number; noticed: boolean };
+  /** Lives in lakes and rivers. */
+  water?: boolean;
+  /** Only comes out at night. */
+  nocturnal?: boolean;
+  /** Follows a herd/school leader. */
+  leader?: Animal | null;
+  /** Drawn to campfires and lamps. */
+  moth?: boolean;
+  /** Fish that leap out of the water now and then. */
+  leaps?: boolean;
 }
 const base = () => ({ look: { yaw: 0, pitch: 0, away: false, timer: 3 + Math.random() * 5, ay: 0, ap: 0 }, roar: { timer: 0, next: 8 + Math.random() * 25, noticed: false } });
 
@@ -367,7 +377,175 @@ function buzzer(rng: Rng): Animal {
       return Math.sin(t * 2 + ph) * 0.25; } };
 }
 
-export const GROUND = [longneck, stilter, worm, hopper, crawler];
-export const FLYING = [floater, manta, bird, buzzer];
+/** Round, tusked grunter with glowing bulb tusks and a spiky mohawk. */
+function bulbhog(rng: Rng): Animal {
+  const [main, acc, belly] = pick(rng, SCHEMES), g = new THREE.Group();
+  const b = new Builder();
+  b.add(S(0.85, 14, 10), main, { p: [0, 0.95, 0], s: [1.15, 0.95, 1.5] })
+   .add(S(0.6, 10, 8), belly, { p: [0, 0.7, 0.1], s: [1.1, 0.6, 1.3] });
+  for (let i = 0; i < 7; i++) b.add(K(0.12, 0.5 - Math.abs(i - 3) * 0.06, 5), acc, { p: [0, 1.78 - Math.abs(i - 3) * 0.1, -0.9 + i * 0.3], r: [(i - 3) * 0.08, 0, 0] });
+  b.add(T(0.16, 0.045), main, { p: [0, 1.0, -1.4], r: [0, Math.PI / 2, 0] });
+  b.into(g);
+  const legs = [[-0.5, 0.7], [0.5, -0.7], [0.5, 0.7], [-0.5, -0.7]].map(([x, z]) => limb(g, [x, 0.62, z], lb => legBuild(lb, main, acc, 0.62, 0.14, 0.18)));
+  const head = limb(g, [0, 0.95, 1.1], hb => {
+    hb.add(S(0.5, 12, 9), main, { s: [1, 0.9, 1.1] }).add(S(0.28, 10, 8), belly, { p: [0, -0.12, 0.4], s: [1.2, 0.8, 1] })
+      .add(S(0.05, 6, 5), 0x1a0a10, { p: [-0.1, -0.1, 0.66] }).add(S(0.05, 6, 5), 0x1a0a10, { p: [0.1, -0.1, 0.66] });
+    for (const x of [-0.25, 0.25]) hb.add(K(0.07, 0.5, 5), 0xfff0b0, { p: [x, -0.15, 0.5], r: [-0.9, 0, x > 0 ? -0.3 : 0.3], glow: true });
+    eyes(hb, [[-0.28, 0.2, 0.35, 0.07], [0.28, 0.2, 0.35, 0.07]]);
+  });
+  const ph = rng() * 6;
+  return { ...base(), mood: 'defensive', head, yawOnly: false, name: 'bulbhog', group: g, speed: 1.2, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+    tick(t) { legs.forEach((l, i) => { l.rotation.x = Math.sin(t * 5 + (i % 2 ? Math.PI : 0) + ph) * 0.6; }); return Math.abs(Math.sin(t * 5 + ph)) * 0.05; } };
+}
+
+/** A huge slow tortoise with a little garden growing on its shell. */
+function shellwalker(rng: Rng): Animal {
+  const [main, acc, belly] = pick(rng, SCHEMES), g = new THREE.Group();
+  const b = new Builder();
+  b.add(new THREE.SphereGeometry(1.9, 18, 12, 0, Math.PI * 2, 0, Math.PI / 2), main, { p: [0, 1.4, 0], s: [1.15, 0.85, 1.5] })
+   .add(S(1.5, 12, 8), belly, { p: [0, 1.3, 0], s: [1.2, 0.35, 1.6] });
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2, e = 0.45 + (i % 3) * 0.28;
+    b.add(S(0.42, 7, 5), acc, { p: [Math.cos(a) * Math.cos(e) * 2.0, 1.4 + Math.sin(e) * 1.45, Math.sin(a) * Math.cos(e) * 2.8], s: [1, 0.35, 1] });
+  }
+  // a tiny garden on top: two pines and a mushroom
+  b.add(C(0.07, 0.09, 0.6, 5), 0x7a5a3a, { p: [0.4, 3.0, 0.2] }).add(K(0.45, 0.8, 6), 0x38c9a0, { p: [0.4, 3.6, 0.2] }).add(K(0.32, 0.6, 6), 0x38c9a0, { p: [0.4, 4.05, 0.2] });
+  b.add(C(0.06, 0.08, 0.5, 5), 0x7a5a3a, { p: [-0.6, 2.9, -0.5] }).add(K(0.4, 0.7, 6), 0x9a6bff, { p: [-0.6, 3.4, -0.5] });
+  b.add(C(0.05, 0.07, 0.3, 5), 0xf0e6ff, { p: [-0.2, 3.1, 0.9] }).add(S(0.22, 8, 5), 0xff5ad0, { p: [-0.2, 3.3, 0.9], s: [1, 0.6, 1] });
+  b.add(K(0.3, 0.9, 6), main, { p: [0, 1.3, -2.6], r: [-Math.PI / 2.2, 0, 0] });
+  b.into(g);
+  const legs = [[-1.2, 1.2], [1.2, -1.2], [1.2, 1.2], [-1.2, -1.2]].map(([x, z]) => limb(g, [x, 1.3, z], lb => legBuild(lb, main, acc, 1.3, 0.34, 0.4)));
+  const head = limb(g, [0, 1.3, 2.4], hb => {
+    hb.add(C(0.3, 0.26, 1.0, 8), main, { p: [0, 0.1, 0.4], r: [Math.PI / 2 - 0.25, 0, 0] })
+      .add(S(0.5, 12, 9), main, { p: [0, 0.25, 1.0], s: [1, 0.9, 1.15] })
+      .add(K(0.1, 0.4, 5), acc, { p: [-0.25, 0.7, 0.85], r: [-0.2, 0, 0.3] }).add(K(0.1, 0.4, 5), acc, { p: [0.25, 0.7, 0.85], r: [-0.2, 0, -0.3] });
+    eyes(hb, [[-0.28, 0.4, 1.2, 0.1], [0.28, 0.4, 1.2, 0.1]]);
+  });
+  const ph = rng() * 6;
+  return { ...base(), mood: 'wary', head, yawOnly: false, name: 'shellwalker', group: g, speed: 0.4, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+    tick(t) { legs.forEach((l, i) => { l.rotation.x = Math.sin(t * 1.8 + (i % 2 ? Math.PI : 0) + ph) * 0.35; }); } };
+}
+
+/** An armadillo-ball that rolls away when startled. */
+function spinner(rng: Rng): Animal {
+  const [main, acc, belly] = pick(rng, SCHEMES), g = new THREE.Group();
+  const roll = new THREE.Group(); roll.position.y = 0.5; g.add(roll);
+  const b = new Builder();
+  b.add(S(0.5, 12, 9), main);
+  for (let i = 0; i < 5; i++) b.add(T(0.5 * Math.sqrt(1 - Math.pow((i - 2) * 0.22, 2)), 0.045), acc, { p: [0, (i - 2) * 0.11, 0], r: [Math.PI / 2, 0, 0] });
+  for (let i = 0; i < 9; i++) { const a = (i / 9) * Math.PI * 2; b.add(K(0.07, 0.22, 4), belly, { p: [Math.cos(a) * 0.45, 0.2 + (i % 3) * 0.12, Math.sin(a) * 0.45], r: [Math.sin(a) * 0.9, 0, -Math.cos(a) * 0.9] }); }
+  b.into(roll);
+  const head = limb(g, [0, 0.5, 0.45], hb => {
+    hb.add(S(0.22, 9, 7), belly, { p: [0, 0, 0.1], s: [1, 0.9, 1.2] }).add(K(0.06, 0.18, 4), acc, { p: [-0.12, 0.2, 0], r: [0, 0, 0.3] }).add(K(0.06, 0.18, 4), acc, { p: [0.12, 0.2, 0], r: [0, 0, -0.3] });
+    eyes(hb, [[-0.1, 0.06, 0.24, 0.05], [0.1, 0.06, 0.24, 0.05]]);
+  });
+  const feet = [-0.22, 0.22].map(x => limb(g, [x, 0.22, 0.1], fb => fb.add(S(0.1, 6, 5), acc, { s: [1, 0.6, 1.4] })));
+  return { ...base(), mood: 'skittish', head, yawOnly: false, name: 'spinner', group: g, speed: 1.6, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+    tick(t) { roll.rotation.x = t * 4; feet.forEach((f, i) => { f.position.z = 0.1 + Math.sin(t * 8 + i * Math.PI) * 0.12; }); return 0; } };
+}
+
+/** Slender deer-like animal with glowing antlers. Lives in herds. */
+function antlerback(rng: Rng): Animal {
+  const [main, acc, belly] = pick(rng, SCHEMES), g = new THREE.Group();
+  const b = new Builder();
+  b.add(S(0.55, 12, 9), main, { p: [0, 1.55, 0], s: [0.8, 0.85, 1.55] }).add(S(0.4, 10, 7), belly, { p: [0, 1.38, 0.1], s: [0.85, 0.6, 1.4] });
+  for (let i = 0; i < 4; i++) b.add(S(0.1, 6, 5), acc, { p: [(i % 2 ? 1 : -1) * 0.38, 1.6 + (i % 3) * 0.1, -0.4 + i * 0.3], s: [0.4, 1, 1] });
+  b.add(K(0.14, 0.5, 5), 0xffffff, { p: [0, 1.7, -1.1], r: [-1.3, 0, 0], glow: true });
+  b.into(g);
+  const legs = [[-0.3, 0.6], [0.3, -0.6], [0.3, 0.6], [-0.3, -0.6]].map(([x, z]) => limb(g, [x, 1.55, z], lb => legBuild(lb, main, acc, 1.55, 0.07, 0.1)));
+  const head = limb(g, [0, 1.85, 0.85], hb => {
+    hb.add(C(0.13, 0.17, 0.9, 7), main, { p: [0, 0.35, 0.1], r: [-0.35, 0, 0] })
+      .add(S(0.2, 10, 8), main, { p: [0, 0.8, 0.28], s: [1, 0.9, 1.35] }).add(S(0.08, 7, 5), belly, { p: [0, 0.74, 0.55] });
+    for (const sd of [-1, 1]) { // branching glowing antlers
+      hb.add(C(0.025, 0.035, 0.7, 5), 0xbff8ff, { p: [sd * 0.16, 1.2, 0.2], r: [-0.2, 0, -sd * 0.45], glow: true });
+      for (let k = 0; k < 3; k++) hb.add(K(0.02, 0.28, 4), 0xbff8ff, { p: [sd * (0.22 + k * 0.06), 1.15 + k * 0.17, 0.12 - k * 0.04], r: [-0.3, 0, -sd * 1.0], glow: true });
+    }
+    eyes(hb, [[-0.13, 0.86, 0.38, 0.045], [0.13, 0.86, 0.38, 0.045]]);
+  });
+  const ph = rng() * 6;
+  return { ...base(), mood: 'skittish', head, yawOnly: false, name: 'antlerback', group: g, speed: 2.2, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+    tick(t) { legs.forEach((l, i) => { l.rotation.x = Math.sin(t * 4 + (i % 2 ? Math.PI : 0) + ph) * 0.45; }); return Math.abs(Math.sin(t * 4 + ph)) * 0.06; } };
+}
+
+/** Big glowing moth, drawn to campfires and lamps. */
+function moth(rng: Rng): Animal {
+  const [main, acc] = pick(rng, SCHEMES), g = new THREE.Group();
+  const b = new Builder();
+  b.add(S(0.13, 8, 6), main, { s: [1, 1, 2.4] }).add(S(0.1, 8, 6), acc, { p: [0, 0.02, 0.35] });
+  for (const sd of [-1, 1]) b.add(C(0.01, 0.015, 0.35, 4), acc, { p: [sd * 0.06, 0.2, 0.45], r: [-0.5, 0, -sd * 0.3] }).add(K(0.06, 0.14, 4), acc, { p: [sd * 0.12, 0.35, 0.55], r: [-0.4, 0, -sd * 0.6] });
+  eyes(b, [[-0.05, 0.05, 0.43, 0.035], [0.05, 0.05, 0.43, 0.035]]);
+  b.into(g);
+  const mk = (side: number) => {
+    const p = new THREE.Group(); p.position.set(side * 0.08, 0.03, 0.05); p.scale.x = side;
+    p.add(wingMesh(0.95, 0.7, main, 0.9, 0.4));
+    const hind = wingMesh(0.6, 0.5, acc, 0.85, 0.3); hind.position.z = -0.35; p.add(hind);
+    const spot = new THREE.Mesh(new THREE.CircleGeometry(0.11, 10).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xfff2a0, toneMapped: false, side: THREE.DoubleSide }));
+    spot.position.set(0.5, 0.01, 0.0); p.add(spot);
+    g.add(p); return p;
+  };
+  const wl = mk(-1), wr = mk(1), ph = rng() * 6;
+  return { ...base(), mood: 'wary', head: null, yawOnly: false, moth: true, name: 'moth', group: g, speed: 1.4, flying: true, hover: 3 + rng() * 4, heading: 0, turn: 0, turnBias: 0,
+    tick(t) { const f = Math.sin(t * 9 + ph) * 0.9; wr.rotation.z = f; wl.rotation.z = -f; return Math.sin(t * 2 + ph) * 0.3; } };
+}
+
+/** A will-o'-the-wisp: a drifting ball of light that only comes out at night. */
+function wisp(rng: Rng): Animal {
+  const [main] = pick(rng, SCHEMES), g = new THREE.Group();
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }));
+  const halo = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 8), new THREE.MeshBasicMaterial({ color: main, transparent: true, opacity: 0.28, toneMapped: false, depthWrite: false }));
+  g.add(core, halo);
+  const trail = Array.from({ length: 6 }, (_, i) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.1 - i * 0.012, 8, 6), new THREE.MeshBasicMaterial({ color: main, transparent: true, opacity: 0.5 - i * 0.07, toneMapped: false, depthWrite: false }));
+    g.add(m); return m;
+  });
+  const ph = rng() * 6;
+  return { ...base(), mood: 'curious', head: null, yawOnly: false, nocturnal: true, name: 'wisp', group: g, speed: 0.9, flying: true, hover: 1 + rng() * 2.5, heading: 0, turn: 0, turnBias: 0,
+    tick(t) {
+      trail.forEach((m, i) => { m.position.set(Math.sin(t * 2 - i * 0.5 + ph) * 0.12, Math.sin(t * 3 - i * 0.7) * 0.08, -0.25 - i * 0.22); });
+      halo.scale.setScalar(1 + Math.sin(t * 3 + ph) * 0.15); return Math.sin(t * 1.5 + ph) * 0.4;
+    } };
+}
+
+/** A small glowing fish. Swims in schools under the water, and sometimes leaps. */
+function glowfish(rng: Rng): Animal {
+  const [main, acc, belly] = pick(rng, SCHEMES), g = new THREE.Group();
+  const b = new Builder();
+  b.add(S(0.2, 9, 7), main, { s: [0.9, 0.75, 2.4] }).add(S(0.15, 8, 6), belly, { p: [0, -0.06, 0.05], s: [0.8, 0.6, 2.0] })
+   .add(K(0.09, 0.3, 4), acc, { p: [0, 0.18, -0.05], r: [-0.4, 0, 0], s: [0.5, 1, 1] }).add(S(0.04, 6, 5), 0xfff2a0, { p: [0, 0.05, 0.1], s: [1.4, 0.4, 3], glow: true });
+  eyes(b, [[-0.1, 0.05, 0.33, 0.035], [0.1, 0.05, 0.33, 0.035]]);
+  b.into(g);
+  const tail = limb(g, [0, 0, -0.45], tb => tb.add(K(0.18, 0.4, 4), acc, { p: [0, 0, -0.18], r: [-Math.PI / 2, 0, 0], s: [0.3, 1, 1] }));
+  const ph = rng() * 6;
+  return { ...base(), mood: 'skittish', head: null, yawOnly: false, water: true, leaps: true, name: 'glowfish', group: g, speed: 1.8, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+    roar: { timer: 0, next: 1e9, noticed: true },
+    tick(t) { tail.rotation.y = Math.sin(t * 10 + ph) * 0.5; g.rotation.z = Math.sin(t * 5 + ph) * 0.08; } };
+}
+
+/** A sea serpent: humps rising and sinking as it swims. Rare, huge, and it roars. */
+function serpent(rng: Rng): Animal {
+  const [main, acc, belly] = pick(rng, SCHEMES), g = new THREE.Group();
+  const segs: THREE.Group[] = [];
+  for (let i = 0; i < 16; i++) {
+    const r = 0.62 - i * 0.025;
+    segs.push(limb(g, [0, 0, -i * 0.95], sb => {
+      sb.add(S(r, 12, 9), i % 2 ? main : belly, { s: [1, 1, 1.25] });
+      if (i % 2 === 0) sb.add(K(0.14, 0.55 - i * 0.02, 4), acc, { p: [0, r * 0.95, 0], s: [0.4, 1, 1] });
+    }));
+  }
+  const head = limb(segs[0], [0, 0.1, 0.8], hb => {
+    hb.add(S(0.7, 12, 9), main, { s: [1, 0.85, 1.3] }).add(S(0.45, 10, 8), belly, { p: [0, -0.25, 0.45], s: [1, 0.6, 1.2] })
+      .add(K(0.12, 0.7, 5), acc, { p: [-0.35, 0.55, -0.1], r: [-0.5, 0, 0.3] }).add(K(0.12, 0.7, 5), acc, { p: [0.35, 0.55, -0.1], r: [-0.5, 0, -0.3] });
+    eyes(hb, [[-0.38, 0.22, 0.5, 0.12], [0.38, 0.22, 0.5, 0.12]]);
+  });
+  g.scale.setScalar(1.4);
+  const ph = rng() * 6;
+  return { ...base(), mood: 'wary', head, yawOnly: false, water: true, name: 'serpent', group: g, speed: 2.2, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+    tick(t) { segs.forEach((s, i) => { s.position.y = Math.sin(t * 1.6 - i * 0.75 + ph) * 0.95 - 0.1; s.position.x = Math.sin(t * 1.0 - i * 0.5 + ph) * 0.35; }); } };
+}
+
+export const GROUND = [longneck, stilter, worm, hopper, crawler, bulbhog, shellwalker, spinner, antlerback];
+export const FLYING = [floater, manta, bird, buzzer, moth, wisp];
+export const WATERFOLK = [glowfish, serpent];
 export const makeGround = (i: number, rng: Rng): Animal => GROUND[i % GROUND.length](rng);
 export const makeFlyer = (i: number, rng: Rng): Animal => FLYING[i % FLYING.length](rng);
+export const makeWater = (i: number, rng: Rng): Animal => WATERFOLK[i % WATERFOLK.length](rng);

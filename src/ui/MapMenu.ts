@@ -9,8 +9,8 @@ const BUTTONS = [
   { label: '-', x: 20, w: 190 }, { label: '+', x: 225, w: 190 }, { label: 'Close', x: 430, w: 190 },
 ];
 const BTN_Y = 670, BTN_H = 56;
-const ZOOMS = [150, 350, 800]; // half-width of the map in metres
-const RES = 150;               // terrain sample grid
+const ZOOMS = [200, 500, 1000, 2000]; // half-width of the map in metres (the last shows the whole world)
+const RES = 200;               // terrain sample grid
 
 const lerp = (a: number[], b: number[], t: number): number[] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 const clamp01 = (x: number) => Math.min(Math.max(x, 0), 1);
@@ -25,7 +25,7 @@ export class MapMenu extends Screen {
   private dirty = true;
 
   constructor(private onClose: () => void) {
-    super(0.9, 0.9 * H / W, W, H);
+    super(1.35, 1.35 * H / W, W, H); // a big map
     this.base.width = this.base.height = RES;
     this.baseCtx = this.base.getContext('2d')!;
   }
@@ -109,7 +109,7 @@ export class MapMenu extends Screen {
     const X = (wx: number) => MAP.x + MAP.s / 2 + (wx - px) * k, Y = (wz: number) => MAP.y + MAP.s / 2 + (wz - pz) * k;
 
     ctx.fillStyle = 'rgba(150,140,160,0.95)';
-    for (const [x, z, r] of planet.marks.mesas) { ctx.beginPath(); ctx.arc(X(x), Y(z), Math.max(3, r * k), 0, 7); ctx.fill(); }
+    for (const [x, z, r] of [...planet.marks.mesas, ...planet.marks.buttes]) { ctx.beginPath(); ctx.arc(X(x), Y(z), Math.max(3, r * k), 0, 7); ctx.fill(); }
     for (const [x, z, r] of planet.marks.spires) { ctx.beginPath(); ctx.arc(X(x), Y(z), Math.max(3, r * k), 0, 7); ctx.fillStyle = '#d8d0e8'; ctx.fill(); }
     ctx.fillStyle = '#6ff0ff';
     for (const [x, z] of planet.marks.crystals) { const sx = X(x), sy = Y(z); ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx + 4, sy); ctx.lineTo(sx, sy + 6); ctx.lineTo(sx - 4, sy); ctx.fill(); }

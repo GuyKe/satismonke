@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { Screen } from './Screen';
 import { SaveData, SLOTS, listSlots, formatAgo, formatPlaytime } from '../game/Save';
+import type { Settings, Quality } from '../settings';
 import { CONTROLS_LINES, HOWTO_LINES } from './helpText';
 
 const W = 800, H = 500;
-type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause';
+type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings';
 
 interface Btn { label: string; x: number; y: number; w: number; h: number; act: () => void; danger?: boolean; dim?: boolean }
 
@@ -15,6 +16,9 @@ export interface MenuHandlers {
   onResume(): void;
   onSave(): void;
   onMainMenu(): void;
+  /** A setting changed: persist and apply it. */
+  onSettings(): void;
+  onResetArms(): void;
 }
 
 /** The main menu (PLAY / CONTROLS / HOW TO PLAY, with save slots) and the in-game pause menu. */
@@ -29,7 +33,7 @@ export class MenuPanel extends Screen {
   private statusT = 0;
   private dirty = true;
 
-  constructor(private kind: 'main' | 'pause', private h: MenuHandlers, width = 2.0) {
+  constructor(private kind: 'main' | 'pause', private h: MenuHandlers, private settings: Settings, width = 2.0) {
     super(width, width * H / W, W, H);
     this.page = kind === 'main' ? 'main' : 'pause';
     this.build();
@@ -48,10 +52,10 @@ export class MenuPanel extends Screen {
       labels.map(([label, act], i) => ({ label, act, x: 190, y: y0 + i * (bh + gap), w: 420, h: bh }));
     switch (this.page) {
       case 'main':
-        this.btns = col([['PLAY', () => { this.slots = listSlots(); this.go('slots'); }], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')]], 170);
+        this.btns = col([['PLAY', () => { this.slots = listSlots(); this.go('slots'); }], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['SETTINGS', () => this.go('settings')]], 140, 66, 14);
         break;
       case 'pause':
-        this.btns = col([['RESUME', () => this.h.onResume()], ['SAVE GAME', () => this.h.onSave()], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['SAVE & MAIN MENU', () => this.h.onMainMenu()]], 100, 62, 12);
+        this.btns = col([['RESUME', () => this.h.onResume()], ['SAVE GAME', () => this.h.onSave()], ['SETTINGS', () => this.go('settings')], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['SAVE & MAIN MENU', () => this.h.onMainMenu()]], 88, 56, 10);
         break;
       case 'slots':
         this.slots = listSlots();
@@ -72,6 +76,19 @@ export class MenuPanel extends Screen {
       case 'controls': case 'howto':
         this.btns = [this.back()];
         break;
+      case 'settings': {
+        const s = this.settings, change = (fn: () => void) => () => { fn(); this.h.onSettings(); this.build(); };
+        const qs: Quality[] = ['low', 'medium', 'high'];
+        this.btns = [
+          { label: '-', x: 470, y: 96, w: 70, h: 56, act: change(() => { s.volume = Math.max(0, Math.round((s.volume - 0.1) * 10) / 10); }) },
+          { label: '+', x: 690, y: 96, w: 70, h: 56, act: change(() => { s.volume = Math.min(1, Math.round((s.volume + 0.1) * 10) / 10); }) },
+          { label: s.laserAlways ? 'ALWAYS' : 'AUTO', x: 470, y: 166, w: 290, h: 56, act: change(() => { s.laserAlways = !s.laserAlways; }) },
+          { label: s.graphics.toUpperCase(), x: 470, y: 236, w: 290, h: 56, act: change(() => { s.graphics = qs[(qs.indexOf(s.graphics) + 1) % 3]; }) },
+          { label: 'RESET', x: 470, y: 306, w: 290, h: 56, act: () => { this.h.onResetArms(); this.flash('Arm span will be measured again'); } },
+          this.back(),
+        ];
+        break;
+      }
     }
   }
 
@@ -108,7 +125,7 @@ export class MenuPanel extends Screen {
     ctx.fillStyle = '#080c18'; ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 6; ctx.strokeRect(5, 5, W - 10, H - 10);
     ctx.fillStyle = '#ffb347';
-    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED' };
+    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS' };
     ctx.font = this.page === 'main' ? 'bold 72px monospace' : 'bold 48px monospace';
     ctx.fillText(titles[this.page], W / 2, this.page === 'main' ? 110 : 66);
 
@@ -116,6 +133,14 @@ export class MenuPanel extends Screen {
       ctx.textAlign = 'left'; ctx.font = '22px monospace'; ctx.fillStyle = '#d8e8f0';
       (this.page === 'controls' ? CONTROLS_LINES : HOWTO_LINES).forEach((l, i) => ctx.fillText(l, 40, 112 + i * 30));
       ctx.textAlign = 'center';
+    }
+    if (this.page === 'settings') {
+      ctx.textAlign = 'left'; ctx.fillStyle = '#d8e8f0'; ctx.font = 'bold 26px monospace';
+      ['Volume', 'Laser pointer', 'Graphics', 'Arm span'].forEach((l, i) => ctx.fillText(l, 50, 134 + i * 70));
+      ctx.font = '17px monospace'; ctx.fillStyle = '#7a8aa0';
+      ['', 'AUTO shows it when aimed at a screen', 'Applies to the next planet you land on', 'Measured when you stretch your arms wide'].forEach((l, i) => ctx.fillText(l, 50, 156 + i * 70));
+      ctx.textAlign = 'center'; ctx.fillStyle = '#ffb347'; ctx.font = 'bold 30px monospace';
+      ctx.fillText(`${Math.round(this.settings.volume * 100)}%`, 615, 134);
     }
     if (this.page === 'slots') {
       for (let i = 0; i < SLOTS; i++) {

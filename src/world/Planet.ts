@@ -6,7 +6,9 @@ import { buildHubMesh, addHubColliders, HUB_RADIUS, HubMesh, HubPose } from './H
 import { buildCampfire, buildLamp, PropKind, PropMesh } from './Props';
 import type { PlanetState } from '../game/Save';
 import type { Ore } from '../game/Progress';
+import type { Quality } from '../settings';
 import { heightAt, buildTerrainMesh, pathMask, PONDS, LAKE, pondY, WATER_Y } from './Terrain';
+import { makeWater } from './Animals';
 
 export interface TreeRec {
   pine: boolean; x: number; y: number; z: number; h: number;
@@ -39,6 +41,15 @@ export const NIGHT_SECONDS = 5 * 60;
 const CYCLE = DAY_SECONDS + NIGHT_SECONDS;
 const SKY_R = 1500;
 const ABOVE_WATER = WATER_Y + 1.2;
+/** Radius of the playable world in metres (terrain, trees, ores and creatures are spread out to here). */
+export const WORLD_R = 440;
+
+/** Detail multipliers per graphics setting (they decide how many things the planet is generated with). */
+const QUALITY: Record<Quality, { grass: number; animals: number; fish: number; trees: number; boulders: number; ores: number; mush: number; crystals: number; rocks: number; mountains: number; cull: number }> = {
+  low: { grass: 0.45, animals: 0.45, fish: 0.5, trees: 0.55, boulders: 0.55, ores: 0.6, mush: 0.5, crystals: 0.6, rocks: 0.6, mountains: 0.6, cull: 110 },
+  medium: { grass: 1, animals: 0.8, fish: 0.8, trees: 1, boulders: 1, ores: 1, mush: 1, crystals: 1, rocks: 1, mountains: 1, cull: 160 },
+  high: { grass: 1.3, animals: 1, fish: 1, trees: 1.2, boulders: 1.2, ores: 1.2, mush: 1.3, crystals: 1.2, rocks: 1.2, mountains: 1, cull: 220 },
+};
 
 function rngFrom(seed: number) {
   return () => { seed |= 0; seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
@@ -109,7 +120,7 @@ export class Planet {
   private pineMesh!: THREE.InstancedMesh;
   private falling: { rec: TreeRec; group: THREE.Group; t: number; axis: THREE.Vector3; landed: boolean }[] = [];
   /** Landmarks for the map. */
-  readonly marks = { mesas: [] as [number, number, number][], spires: [] as [number, number, number][], crystals: [] as [number, number][] };
+  readonly marks = { mesas: [] as [number, number, number][], buttes: [] as [number, number, number][], spires: [] as [number, number, number][], crystals: [] as [number, number][] };
   /** A tree has finished falling and vanished: here is the wood it gave. */
   onWood: ((amount: number, pos: THREE.Vector3) => void) | null = null;
   /** A felled tree hit the ground. */
@@ -154,11 +165,18 @@ export class Planet {
   private skyDusk = new THREE.Color(0xff8a6a);
   private skyNight = new THREE.Color(0x070618);
 
-  constructor(seed = 7) {
+  private q: (typeof QUALITY)['medium'];
+  private nightF = 0;
+  private grassMesh!: THREE.InstancedMesh;
+  private grassCenter = new THREE.Vector2(1e9, 1e9);
+  private leapState = new Map<Animal, { t: number; next: number }>();
+
+  constructor(seed = 7, readonly quality: Quality = 'medium') {
+    this.q = QUALITY[quality];
     const rng = rngFrom(seed);
     this.world.hull = false; this.world.heightFn = heightAt; this.world.groundSlip = 0.1;
 
-    this.group.add(buildTerrainMesh(groundTexture(rng)));
+    this.group.add(buildTerrainMesh(groundTexture(rng), quality));
     const waterMat = new THREE.MeshStandardMaterial({ color: 0x3fd6e6, emissive: 0x0a6a78, emissiveIntensity: 0.6, transparent: true, opacity: 0.8, roughness: 0.15, metalness: 0.2 });
     this.water = new THREE.Mesh(new THREE.CircleGeometry(2400, 48).rotateX(-Math.PI / 2), waterMat);
     this.water.position.y = WATER_Y;
@@ -169,7 +187,7 @@ export class Planet {
       this.group.add(w);
     }
 
-    this.buildGrass(rng);
+    this.buildGrass();
     this.buildTrees(rng);
     this.buildBoulders(rng);
     this.buildMesas(rng);
@@ -225,26 +243,44 @@ export class Planet {
     return { x: rMin, z: 0, h: 0 };
   }
 
-  private buildGrass(rng: () => number): void {
-    const N = 10000;
-    // Short grass: blades are 0.15-0.45 m tall
+  /** Short grass that follows you: blades are placed from a hash of the world cell, so they stay put as you move. */
+  private buildGrass(): void {
+    const N = Math.round(11000 * this.q.grass);
     const geo = new THREE.ConeGeometry(0.045, 0.4, 3, 1).translate(0, 0.2, 0);
-    const mesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.9 }), N);
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), col = new THREE.Color();
+    this.grassMesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ roughness: 0.9 }), N);
+    this.grassMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.grassMesh.frustumCulled = false;
+    this.group.add(this.grassMesh);
+    this.regrowGrass(0, 0);
+  }
+
+  private regrowGrass(cx: number, cz: number): void {
+    this.grassCenter.set(cx, cz);
+    const mesh = this.grassMesh, N = mesh.instanceMatrix.count, R = 95, CELL = 4, half = Math.ceil(R / CELL);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), col = new THREE.Color(), pos = new THREE.Vector3(), sc = new THREE.Vector3();
+    const gx0 = Math.floor(cx / CELL), gz0 = Math.floor(cz / CELL);
     let n = 0;
-    for (let tries = 0; n < N && tries < N * 2; tries++) {
-      const a = rng() * Math.PI * 2, r = 1.2 + Math.pow(rng(), 1.5) * 120;
-      const x = Math.cos(a) * r, z = Math.sin(a) * r, y = heightAt(x, z);
-      if (y < ABOVE_WATER - 0.4 || pathMask(x, z) > 0.3) continue;
-      e.set((rng() - 0.5) * 0.4, rng() * 6.28, (rng() - 0.5) * 0.4);
-      const s = 0.55 + rng() * 0.6;
-      m.compose(new THREE.Vector3(x, y, z), q.setFromEuler(e), new THREE.Vector3(s, s * (0.8 + rng() * 0.5), s));
-      mesh.setMatrixAt(n, m);
-      mesh.setColorAt(n, col.setHSL(0.76 + rng() * 0.2, 0.55 + rng() * 0.3, 0.42 + rng() * 0.22));
-      n++;
+    for (let i = -half; i <= half && n < N; i++) {
+      for (let j = -half; j <= half && n < N; j++) {
+        const gx = gx0 + i, gz = gz0 + j;
+        for (let k = 0; k < 4 && n < N; k++) {
+          const h1 = hash3(gx, gz, k), h2 = hash3(gz, k, gx), h3 = hash3(k, gx, gz);
+          const x = (gx + h1) * CELL, z = (gz + h2) * CELL, d = Math.hypot(x - cx, z - cz);
+          if (d > R || h3 > 1 - Math.pow(d / R, 1.4) || Math.hypot(x, z) < 1.2) continue; // thinner toward the edge, clear at the landing spot
+          const y = heightAt(x, z);
+          if (y < ABOVE_WATER - 0.4 || pathMask(x, z) > 0.3) continue;
+          e.set((h1 - 0.5) * 0.4, h2 * 6.28, (h3 - 0.5) * 0.4);
+          const s = 0.55 + h3 * 0.6;
+          m.compose(pos.set(x, y, z), q.setFromEuler(e), sc.set(s, s * (0.8 + h1 * 0.5), s));
+          mesh.setMatrixAt(n, m);
+          mesh.setColorAt(n, col.setHSL(0.76 + h2 * 0.2, 0.55 + h3 * 0.3, 0.42 + h1 * 0.22));
+          n++;
+        }
+      }
     }
     mesh.count = n;
-    this.group.add(mesh);
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
 
   /** Clusters of alien trees across the plains, plus a few loners. Trees stay at least 9 m apart. */
@@ -258,15 +294,16 @@ export class Planet {
       spots.push({ x, z, y, h: 6 + rng() * 6, cr: 2.2 + rng() * 1.4, c: Math.floor(rng() * 4), pine: rng() < 0.45 });
       return true;
     };
-    for (let k = 0; k < 18; k++) {
-      const c = this.dryPoint(rng, 35, 200, ABOVE_WATER + 0.5);
+    const maxTrees = Math.round(230 * this.q.trees);
+    for (let k = 0; k < Math.round(40 * this.q.trees); k++) {
+      const c = this.dryPoint(rng, 35, WORLD_R, ABOVE_WATER + 0.5);
       const n = 3 + Math.floor(rng() * 6);
       for (let t = 0, added = 0; t < 40 && added < n; t++) {
         const a = rng() * Math.PI * 2, d = rng() * 28;
         if (tryAdd(c.x + Math.cos(a) * d, c.z + Math.sin(a) * d)) added++;
       }
     }
-    for (let k = 0; k < 40 && spots.length < 110; k++) { const p = this.dryPoint(rng, 18, 200); tryAdd(p.x, p.z, 14); }
+    for (let k = 0; k < 90 && spots.length < maxTrees; k++) { const p = this.dryPoint(rng, 18, WORLD_R); tryAdd(p.x, p.z, 14); }
 
     const pineGeo = mergeGeometries([
       new THREE.ConeGeometry(1.0, 0.5, 8).translate(0, 0.25, 0),
@@ -312,11 +349,11 @@ export class Planet {
 
   /** Round boulders dotted over the plains: solid and grippy-ish. */
   private buildBoulders(rng: () => number): void {
-    const N = 70;
+    const N = Math.round(150 * this.q.boulders);
     const mesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ roughness: 0.95, flatShading: true }), N);
     const m = new THREE.Matrix4(), col = new THREE.Color();
     for (let i = 0; i < N; i++) {
-      const p = this.dryPoint(rng, 10, 210), r = 0.9 + Math.pow(rng(), 2) * 4.5;
+      const p = this.dryPoint(rng, 10, WORLD_R), r = 0.9 + Math.pow(rng(), 2) * 4.5;
       m.compose(new THREE.Vector3(p.x, p.h + r * 0.25, p.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rng() * 6, 0)), new THREE.Vector3(r, r * 0.7, r * (0.8 + rng() * 0.4)));
       mesh.setMatrixAt(i, m); mesh.setColorAt(i, col.setHSL(0.74 + rng() * 0.08, 0.12, 0.36 + rng() * 0.2));
       this.world.addSphere(new THREE.Vector3(p.x, p.h + r * 0.3, p.z), r * 0.78, 0.3, BOULDER_OWNER + i);
@@ -366,13 +403,22 @@ export class Planet {
       this.world.addPillar(x, z, base, top, r * 0.9, 0.15);
       this.world.addPillar(x, z, top - 6, top, r * 1.7, 0.15);
     }
+    // flat-topped buttes standing on the plains: climb them with good gloves
+    for (let i = 0; i < Math.round(12 * this.q.rocks); i++) {
+      const c = this.dryPoint(rng, 60, WORLD_R - 40, ABOVE_WATER + 3), r = 13 + rng() * 14, top = c.h + 9 + rng() * 14, base = c.h - 14;
+      const m = rock(r * 0.9, r * 1.1, base, top); m.position.set(c.x, 0, c.z); this.group.add(m);
+      const cap = new THREE.Mesh(new THREE.CircleGeometry(r * 0.9, 20).rotateX(-Math.PI / 2), grassMat);
+      cap.position.set(c.x, top + 0.05, c.z); this.group.add(cap);
+      this.world.addPillar(c.x, c.z, base, top, r * 0.95, 0.15);
+      this.marks.buttes.push([c.x, c.z, r]);
+    }
   }
 
   /** Glowing crystal spires you can climb. */
   private buildCrystals(rng: () => number): void {
     const items: { x: number; y: number; z: number; r: number; h: number; c: number }[] = [];
-    for (let k = 0; k < 11; k++) {
-      const c = this.dryPoint(rng, 30, 170, ABOVE_WATER + 1);
+    for (let k = 0; k < Math.round(20 * this.q.crystals); k++) {
+      const c = this.dryPoint(rng, 30, WORLD_R - 30, ABOVE_WATER + 1);
       const n = 3 + Math.floor(rng() * 4);
       for (let i = 0; i < n; i++) {
         const a = rng() * Math.PI * 2, d = 1 + rng() * 4;
@@ -399,20 +445,20 @@ export class Planet {
     const spots: { type: Ore; x: number; y: number; z: number; r: number }[] = [];
     const vein = (type: Ore, veins: number, per: number, rMin: number, rMax: number) => {
       for (let v = 0; v < veins; v++) {
-        const c = this.dryPoint(rng, 20, 215, ABOVE_WATER + 0.5);
+        const c = this.dryPoint(rng, 20, WORLD_R, ABOVE_WATER + 0.5);
         for (let k = 0; k < per; k++) {
           const a = rng() * Math.PI * 2, d = 1.5 + rng() * 7, x = c.x + Math.cos(a) * d, z = c.z + Math.sin(a) * d, y = heightAt(x, z);
           if (y > ABOVE_WATER && pathMask(x, z) < 0.5) spots.push({ type, x, y, z, r: rMin + rng() * (rMax - rMin) });
         }
       }
     };
-    vein('copper', 8, 3, 0.9, 1.6);
-    vein('iron', 7, 3, 0.9, 1.6);
+    vein('copper', Math.round(16 * this.q.ores), 3, 0.9, 1.6);
+    vein('iron', Math.round(14 * this.q.ores), 3, 0.9, 1.6);
     // gold: the highest ground within reach
     const high: { x: number; z: number; y: number }[] = [];
-    for (let i = 0; i < 500; i++) { const a = rng() * Math.PI * 2, r = 70 + rng() * 190, x = Math.cos(a) * r, z = Math.sin(a) * r; high.push({ x, z, y: heightAt(x, z) }); }
+    for (let i = 0; i < 900; i++) { const a = rng() * Math.PI * 2, r = 70 + rng() * (WORLD_R - 70), x = Math.cos(a) * r, z = Math.sin(a) * r; high.push({ x, z, y: heightAt(x, z) }); }
     high.sort((a, b) => b.y - a.y);
-    for (const h of high) { if (spots.filter(s => s.type === 'gold').length >= 10) break; if (spots.some(s => s.type === 'gold' && Math.hypot(s.x - h.x, s.z - h.z) < 28)) continue; spots.push({ type: 'gold', x: h.x, y: h.y, z: h.z, r: 0.8 + rng() * 0.5 }); }
+    for (const h of high) { if (spots.filter(s => s.type === 'gold').length >= Math.round(18 * this.q.ores)) break; if (spots.some(s => s.type === 'gold' && Math.hypot(s.x - h.x, s.z - h.z) < 28)) continue; spots.push({ type: 'gold', x: h.x, y: h.y, z: h.z, r: 0.8 + rng() * 0.5 }); }
     // plasma: on top of the mesas out in the lake
     this.marks.mesas.forEach(([mx, mz, mr], i) => {
       for (let k = 0; k < (mr > 40 ? 2 : 1); k++) { const a = rng() * Math.PI * 2, d = rng() * mr * 0.6; spots.push({ type: 'plasma', x: mx + Math.cos(a) * d, y: this.mesaTops[i], z: mz + Math.sin(a) * d, r: 1.1 + rng() * 0.5 }); }
@@ -481,7 +527,7 @@ export class Planet {
   exportState(): PlanetState {
     const ids = <T extends { felled?: boolean; broken?: boolean }>(a: readonly T[]) => a.flatMap((r, i) => (r.felled || r.broken ? [i] : []));
     return {
-      clock: this.clock,
+      quality: this.quality, clock: this.clock,
       felledTrees: ids(this.treeRecs), brokenBoulders: ids(this.boulderRecs), brokenCrystals: ids(this.crystalRecs), brokenOres: ids(this.oreRecs),
       podAlive: this.podAlive,
       podHead: [this.podHead.x, this.podHead.y, this.podHead.z], podForward: [this.podForward.x, this.podForward.y, this.podForward.z],
@@ -513,10 +559,11 @@ export class Planet {
 
   /** Rocks floating in the air: reachable by chaining launches off tall trees. */
   private buildFloatingRocks(rng: () => number): void {
-    const mesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }), 10);
+    const NR = Math.round(16 * this.q.rocks);
+    const mesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ roughness: 0.9, flatShading: true }), NR);
     const m = new THREE.Matrix4(), col = new THREE.Color();
-    for (let i = 0; i < 10; i++) {
-      const p = this.dryPoint(rng, 25, 150, ABOVE_WATER), r = 3 + rng() * 4, y = p.h + 14 + rng() * 22;
+    for (let i = 0; i < NR; i++) {
+      const p = this.dryPoint(rng, 25, WORLD_R - 40, ABOVE_WATER), r = 3 + rng() * 4, y = p.h + 14 + rng() * 22;
       m.compose(new THREE.Vector3(p.x, y, p.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rng() * 3, rng() * 3, rng() * 3)), new THREE.Vector3(r, r * 0.8, r));
       mesh.setMatrixAt(i, m); mesh.setColorAt(i, col.setHSL(0.72 + rng() * 0.12, 0.25, 0.35 + rng() * 0.15));
       this.world.addSphere(new THREE.Vector3(p.x, y, p.z), r * 0.85, 0.15);
@@ -529,14 +576,14 @@ export class Planet {
   }
 
   private buildMushrooms(rng: () => number): void {
-    const N = 420;
+    const N = Math.round(900 * this.q.mush);
     const stems = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.06, 0.09, 1, 6).translate(0, 0.5, 0), new THREE.MeshStandardMaterial({ color: 0xf0e6ff }), N);
     const caps = new THREE.InstancedMesh(new THREE.SphereGeometry(0.5, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2),
       new THREE.MeshBasicMaterial({ toneMapped: false }), N);
     const m = new THREE.Matrix4(), col = new THREE.Color(), q = new THREE.Quaternion();
     const palette = [0xff5ad0, 0x5af0ff, 0xb08cff, 0xffd45a];
     for (let i = 0; i < N; i++) {
-      const p = this.dryPoint(rng, 4, 140), h = 0.25 + rng() * 0.6, w = 0.25 + rng() * 0.4;
+      const p = this.dryPoint(rng, 4, WORLD_R), h = 0.25 + rng() * 0.6, w = 0.25 + rng() * 0.4;
       m.compose(new THREE.Vector3(p.x, p.h, p.z), q, new THREE.Vector3(1, h, 1)); stems.setMatrixAt(i, m);
       m.compose(new THREE.Vector3(p.x, p.h + h, p.z), q, new THREE.Vector3(w, w * 0.9, w)); caps.setMatrixAt(i, m);
       caps.setColorAt(i, col.set(palette[i % 4]));
@@ -564,8 +611,9 @@ export class Planet {
       g.computeVertexNormals();
       return g;
     };
-    for (let i = 0; i < 34; i++) {
-      const a = (i / 34) * Math.PI * 2 + rng() * 0.15, r = 1500 + rng() * 800, h = 260 + rng() * 520;
+    const NM = Math.round(34 * this.q.mountains);
+    for (let i = 0; i < NM; i++) {
+      const a = (i / NM) * Math.PI * 2 + rng() * 0.15, r = 1500 + rng() * 800, h = 260 + rng() * 520;
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       const m = new THREE.Mesh(make(h * (0.55 + rng() * 0.35), h), mat);
       m.position.set(x, heightAt(x, z) - 25, z); m.rotation.y = rng() * 6;
@@ -578,14 +626,58 @@ export class Planet {
   }
 
   private buildAnimals(rng: () => number): void {
-    const place = (an: Animal, rMin: number, rMax: number) => {
-      const p = this.dryPoint(rng, rMin, rMax, ABOVE_WATER + 0.5);
-      an.group.position.set(p.x, p.h, p.z);
-      an.heading = rng() * Math.PI * 2;
+    const q = this.q;
+    const add = (an: Animal, x: number, y: number, z: number) => {
+      an.group.position.set(x, y, z); an.heading = rng() * Math.PI * 2;
       this.animals.push(an); this.group.add(an.group);
+      return an;
     };
-    for (let i = 0; i < 16; i++) place(makeGround(i, rng), 14, 130);
-    for (let i = 0; i < 16; i++) place(makeFlyer(i, rng), 10, 150);
+    const place = (an: Animal, rMin: number, rMax: number) => { const p = this.dryPoint(rng, rMin, rMax, ABOVE_WATER + 0.5); return add(an, p.x, p.h, p.z); };
+    const nGround = Math.round(40 * q.animals), nFly = Math.round(30 * q.animals);
+    for (let i = 0; i < nGround; i++) place(makeGround(i, rng), 14, WORLD_R - 30);
+    for (let i = 0; i < nFly; i++) place(makeFlyer(i, rng), 10, WORLD_R - 20);
+
+    // herds of antlerbacks: the first is the leader, the rest follow it
+    for (let h = 0; h < Math.max(1, Math.round(3 * q.animals)); h++) {
+      const c = this.dryPoint(rng, 40, WORLD_R - 60, ABOVE_WATER + 1);
+      let lead: Animal | null = null;
+      for (let k = 0; k < 5; k++) {
+        const an = makeGround(8, rng), x = c.x + (rng() - 0.5) * 12, z = c.z + (rng() - 0.5) * 12;
+        add(an, x, heightAt(x, z), z);
+        if (lead) { an.leader = lead; an.heading = lead.heading; } else lead = an;
+      }
+    }
+
+    // water life: schools of glowfish and a couple of sea serpents
+    const waterPoint = (rMax: number, minDepth: number, cx = 0, cz = 0): { x: number; z: number } | null => {
+      for (let i = 0; i < 200; i++) {
+        const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * rMax, x = cx + Math.cos(a) * r, z = cz + Math.sin(a) * r;
+        if (heightAt(x, z) < WATER_Y - minDepth) return { x, z };
+      }
+      return null;
+    };
+    for (let sc = 0; sc < Math.round(9 * q.fish); sc++) {
+      const c = waterPoint(WORLD_R, 1.5);
+      if (!c) continue;
+      let lead: Animal | null = null;
+      for (let k = 0; k < 6; k++) {
+        const x = c.x + (rng() - 0.5) * 8, z = c.z + (rng() - 0.5) * 8;
+        if (heightAt(x, z) > WATER_Y - 0.8) continue;
+        const an = add(makeWater(0, rng), x, WATER_Y - 0.55, z);
+        if (lead) { an.leader = lead; an.heading = lead.heading; } else lead = an;
+      }
+    }
+    for (let i = 0; i < Math.max(1, Math.round(2 * q.fish)); i++) {
+      const c = waterPoint(190, 4, LAKE.x, LAKE.z);
+      if (c) add(makeWater(1, rng), c.x, WATER_Y, c.z);
+    }
+  }
+
+  /** Nearest campfire or lamp within `range` (for moths). */
+  private nearestProp(x: number, z: number, range: number): { x: number; z: number } | null {
+    let best: { x: number; z: number } | null = null, bd = range;
+    for (const pr of this.propList) { const d = Math.hypot(pr.x - x, pr.z - z); if (d < bd) { bd = d; best = pr; } }
+    return best;
   }
 
   /** 0..CYCLE seconds into the day/night cycle. */
@@ -610,6 +702,8 @@ export class Planet {
     this.moon.position.set(-dir.x, -dir.y * 0.9, 0.4).multiplyScalar(SKY_R * 0.9);
     this.moon.visible = this.moon.position.y > -50;
     const night = Math.pow(1 - day, 1.5);
+    this.nightF = night;
+    if (Math.hypot(follow.x - this.grassCenter.x, follow.z - this.grassCenter.y) > 35) this.regrowGrass(follow.x, follow.z);
     (this.stars.material as THREE.PointsMaterial).opacity = night;
 
     const sky = this.tmpCol.copy(this.skyNight).lerp(this.skyDay, day).lerp(this.skyDusk, dusk * 0.55 * (day > 0.02 ? 1 : 0.5));
@@ -652,9 +746,9 @@ export class Planet {
     for (const an of this.animals) {
       const p = an.group.position;
       const dx = head.x - p.x, dz = head.z - p.z, d = Math.hypot(dx, dz);
-      const far = d > 220;
-      an.group.visible = !far;
-      if (far && !an.flying) continue; // freeze distant ground animals
+      const far = d > this.q.cull;
+      an.group.visible = !far && (!an.nocturnal || this.nightF > 0.1); // wisps only glow at night
+      if (far && (!an.flying || an.water)) continue; // freeze distant ground and water animals
 
       // ---- attention span: it studies you for a while, then looks away for a while ----
       const lk = an.look;
@@ -685,7 +779,17 @@ export class Planet {
         default: break;
       }
       // Walk into its path and it goes around you.
-      if (steer === null && d < 15 && Math.abs(delta) < 0.6) steer = an.heading - Math.sign(delta || 1) * 1.0;
+      if (steer === null && d < 15 && Math.abs(delta) < 0.6 && !an.water) steer = an.heading - Math.sign(delta || 1) * 1.0;
+      // Herd and school animals stay with their leader
+      if (steer === null && an.leader) {
+        const L = an.leader.group.position, ld = Math.hypot(L.x - p.x, L.z - p.z);
+        if (ld > 8) { steer = Math.atan2(L.x - p.x, L.z - p.z); speedMul = 1.3; } else steer = an.leader.heading;
+      }
+      // Moths circle campfires and lamps
+      if (steer === null && an.moth) {
+        const pr = this.nearestProp(p.x, p.z, 90);
+        if (pr) { const pd = Math.hypot(pr.x - p.x, pr.z - p.z); steer = Math.atan2(pr.x - p.x, pr.z - p.z) + (pd < 7 ? 1.3 : 0); speedMul = pd < 7 ? 0.9 : 1.6; }
+      }
 
       if (steer !== null) {
         an.turn = THREE.MathUtils.clamp(wrap(steer - an.heading) * 2, -1.6, 1.6);
@@ -694,9 +798,12 @@ export class Planet {
       } else {
         an.turn += (Math.random() - 0.5) * 1.5 * dt;
         an.turn = THREE.MathUtils.clamp(an.turn, -0.6, 0.6) * (1 - 0.5 * dt);
-        if (Math.hypot(p.x, p.z) > 170) an.turn = THREE.MathUtils.clamp(wrap(Math.atan2(-p.x, -p.z) - an.heading), -1, 1);
+        if (Math.hypot(p.x, p.z) > WORLD_R - 20) an.turn = THREE.MathUtils.clamp(wrap(Math.atan2(-p.x, -p.z) - an.heading), -1, 1);
       }
-      if (!an.flying) { // steer around rocks, trunks and lakes
+      if (an.water) { // stay in the water
+        const wet = (a: number) => heightAt(p.x + Math.sin(a) * 6, p.z + Math.cos(a) * 6);
+        if (wet(an.heading) > WATER_Y - 0.9) an.turn = wet(an.heading + 0.8) < wet(an.heading - 0.8) ? 1.5 : -1.5;
+      } else if (!an.flying) { // steer around rocks, trunks and lakes
         const ahead = (a: number) => this.clearAt(p.x + Math.sin(a) * 4, p.z + Math.cos(a) * 4);
         if (ahead(an.heading) < 1.2 || heightAt(p.x + Math.sin(an.heading) * 5, p.z + Math.cos(an.heading) * 5) < ABOVE_WATER)
           an.turn = ahead(an.heading + 0.7) > ahead(an.heading - 0.7) ? 1.4 : -1.4;
@@ -710,7 +817,16 @@ export class Planet {
       this.clocks.set(an, clk);
       const lift = an.tick(clk) || 0;
       const ground = heightAt(p.x, p.z);
-      p.y = an.flying ? Math.max(ground, WATER_Y) + an.hover + Math.sin(this.animalTime * 0.6 + an.hover) * 0.8 + lift : ground + lift;
+      if (an.water) {
+        let y = an.name === 'serpent' ? WATER_Y : WATER_Y - 0.55 + Math.sin(this.animalTime * 1.3 + p.x) * 0.08;
+        if (an.leaps) { // glowfish jump out of the water now and then
+          const st = this.leapState.get(an) ?? { t: -1, next: 3 + Math.random() * 12 }; this.leapState.set(an, st);
+          st.next -= dt;
+          if (st.t < 0 && st.next <= 0) { st.t = 0; st.next = 6 + Math.random() * 16; }
+          if (st.t >= 0) { st.t += dt; const k = st.t / 0.9; y += Math.sin(Math.PI * Math.min(k, 1)) * 1.7; an.group.rotation.x = -0.6 * Math.cos(Math.PI * Math.min(k, 1)); if (k >= 1) { st.t = -1; an.group.rotation.x = 0; } }
+        }
+        p.y = y;
+      } else p.y = an.flying ? Math.max(ground, WATER_Y) + an.hover + Math.sin(this.animalTime * 0.6 + an.hover) * 0.8 + lift : ground + lift;
       an.group.rotation.y = an.heading;
 
       // ---- roars ----
@@ -724,7 +840,7 @@ export class Planet {
       }
       const env = r.timer > 0 ? Math.sin(Math.PI * (1 - r.timer / 1.4)) : 0;
       if (r.timer > 0) r.timer -= dt;
-      an.group.scale.setScalar(1 + 0.07 * env);
+      an.group.scale.setScalar((an.nocturnal ? Math.max(0.001, this.nightF) : an.name === 'serpent' ? 1.4 : 1) * (1 + 0.07 * env));
 
       // ---- head follows you ----
       if (an.head) {

@@ -5,6 +5,8 @@ const key = (i: number) => `satismonke.save.${i}`;
 
 /** Everything about the world that changes while you play (see Planet.exportState). */
 export interface PlanetState {
+  /** The detail level the world was generated with: indices in this save only match that exact world. */
+  quality: 'low' | 'medium' | 'high';
   clock: number;
   felledTrees: number[]; brokenBoulders: number[]; brokenCrystals: number[]; brokenOres: number[];
   podAlive: boolean; podHead: [number, number, number]; podForward: [number, number, number];
@@ -13,7 +15,7 @@ export interface PlanetState {
 }
 
 export interface SaveData {
-  version: 1;
+  version: 2;
   savedAt: number;
   playSeconds: number;
   /** 'capsule' = still in the pod sequence (a fresh start); 'planet' = landed. */
@@ -29,7 +31,7 @@ export function readSlot(i: number): SaveData | null {
     const raw = localStorage.getItem(key(i));
     if (!raw) return null;
     const d = JSON.parse(raw) as SaveData;
-    return d && d.version === 1 ? d : null;
+    return d && d.version === 2 ? d : null; // saves from before the bigger world (version 1) no longer match the map
   } catch { return null; }
 }
 

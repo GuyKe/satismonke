@@ -14,6 +14,8 @@ const SHOTS: Shot[] = [
   { caption: 'The view from above', clock: 130, pos: () => new THREE.Vector3(70, 75, 130), look: () => new THREE.Vector3(0, 0, -30) },
   { caption: 'Saturn sets over the plains', clock: DAY_SECONDS * 0.955, pos: () => ground(0, 0, 2), look: () => new THREE.Vector3(-300, 40, -110) },
   { caption: 'Night bloom', clock: 585, pos: () => ground(30, 50, 1.4), look: () => ground(10, -10, 2.5) },
+  { caption: 'Rivers and ponds', clock: 110, pos: () => new THREE.Vector3(70, 95, 70), look: () => new THREE.Vector3(95, 0, -150) },
+  { caption: 'A wider world', clock: 200, pos: () => new THREE.Vector3(-40, 300, 420), look: () => new THREE.Vector3(-20, -10, -140) },
   { caption: 'Spires in the lake', clock: 320, pos: () => ground(30, -200, 9), look: () => new THREE.Vector3(80, 30, -540) },
 ];
 

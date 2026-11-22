@@ -2,17 +2,24 @@
 export class Sfx {
   private ctx: AudioContext | null = null;
   private master!: GainNode;
+  private vol = 0.8;
   private noise!: AudioBuffer;
   private alarmNodes: AudioNode[] = [];
   private rumbleGain: GainNode | null = null;
   private windNodes: AudioNode[] = [];
+
+  /** Master volume 0..1. */
+  setVolume(v: number): void {
+    this.vol = Math.min(Math.max(v, 0), 1);
+    if (this.ctx) this.master.gain.setTargetAtTime(this.vol, this.ctx.currentTime, 0.05);
+  }
 
   ensure(): void {
     if (!this.ctx) {
       const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
       this.ctx = new Ctor();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.8;
+      this.master.gain.value = this.vol;
       this.master.connect(this.ctx.destination);
       const len = this.ctx.sampleRate * 3;
       this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
@@ -122,7 +129,7 @@ export class Sfx {
     const t = this.ctx.currentTime;
     this.master.gain.cancelScheduledValues(t);
     this.master.gain.setTargetAtTime(0, t, 0.03);
-    this.master.gain.setTargetAtTime(0.8, t + 0.6, 0.05);
+    this.master.gain.setTargetAtTime(this.vol, t + 0.6, 0.05);
   }
 
   /** A hard punch into wood: crack + thump. */
@@ -286,4 +293,12 @@ const VOICES: Record<string, Voice> = {
   bird: { f0: 1700, f1: 900, dur: 0.45, noise: 0.1, trem: 0, form: [2500, 3500], gain: 0.6 },
   buzzer: { f0: 300, f1: 360, dur: 0.7, noise: 0.2, trem: 60, form: [800, 1500], gain: 0.5 },
   floater: { f0: 420, f1: 380, dur: 2.2, noise: 0.0, trem: 5, form: [700, 1400], gain: 0.6 },
+  bulbhog: { f0: 130, f1: 80, dur: 0.8, noise: 0.5, trem: 18, form: [500, 900], gain: 0.9 },
+  shellwalker: { f0: 50, f1: 38, dur: 2.4, noise: 0.15, trem: 2, form: [200, 420], gain: 1.1 },
+  spinner: { f0: 900, f1: 1300, dur: 0.3, noise: 0.1, trem: 0, form: [2000, 3200], gain: 0.5 },
+  antlerback: { f0: 180, f1: 260, dur: 1.3, noise: 0.2, trem: 7, form: [700, 1300], gain: 0.9 },
+  moth: { f0: 600, f1: 700, dur: 0.6, noise: 0, trem: 12, form: [1200, 2400], gain: 0.3 },
+  wisp: { f0: 520, f1: 780, dur: 1.6, noise: 0, trem: 4, form: [900, 1800], gain: 0.35 },
+  glowfish: { f0: 400, f1: 300, dur: 0.2, noise: 0.3, trem: 0, form: [800, 1600], gain: 0.2 },
+  serpent: { f0: 45, f1: 75, dur: 3.6, noise: 0.3, trem: 2.5, form: [250, 520], gain: 1.3 },
 };
