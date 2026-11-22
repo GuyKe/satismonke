@@ -58,6 +58,7 @@ export function buildCapsule(world: CollisionWorld): { group: THREE.Group; light
   };
 
   addBox(0, -2.0, 0, 5.2, 0.4, 11, new THREE.MeshStandardMaterial({ map: grid, roughness: 0.9 }), SLIP.rubber); // floor, top at y=-1.8
+  world.addBox(new THREE.Vector3(0, -4.0, 0), new THREE.Vector3(5.2, 4.4, 11), 0.05); // thick collider under the floor (invisible)
   addBox(0, -1.05, -3.6, 1.9, 1.5, 0.4);       // menu console pedestal (front face z=-3.4)
   addBox(-1.6, -1.45, 1.0, 0.8, 0.7, 0.8, accentMat, SLIP.bark); // grippy crates
   addBox(1.7, -1.35, -0.5, 0.9, 0.9, 0.9, iceMat, SLIP.ice);      // ice block

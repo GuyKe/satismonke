@@ -112,7 +112,7 @@ export class GorillaPlayer {
 
     // 3. Head collider: never let the camera enter walls.
     const head = this.position.clone().add(headLocal);
-    if (this.world.pushOut(head, HEAD_R, nOut)) {
+    if (this.world.pushOut(head, HEAD_R, nOut, true)) {
       this.position.add(head.sub(this.position).sub(headLocal));
       const into = this.velocity.dot(nOut);
       if (into < 0) this.velocity.addScaledVector(nOut, -into);
@@ -122,7 +122,7 @@ export class GorillaPlayer {
     //     no way to stand up or walk, so only hand pushes can move you.
     const body = this.position.clone().add(headLocal);
     body.y -= BODY_DROP;
-    if (this.world.pushOut(body, BODY_R, nOut)) {
+    if (this.world.pushOut(body, BODY_R, nOut, true)) {
       this.position.add(body.sub(this.position).sub(headLocal).add(new THREE.Vector3(0, BODY_DROP, 0)));
       const into = this.velocity.dot(nOut);
       if (into < 0) this.velocity.addScaledVector(nOut, -into);

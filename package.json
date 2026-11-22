@@ -7,7 +7,8 @@
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
-    "test:physics": "tsx tests/physics.sanity.ts"
+    "test:physics": "tsx tests/physics.sanity.ts",
+    "test:fuzz": "tsx tests/fuzz.ts"
   },
   "dependencies": {
     "three": "^0.170.0"

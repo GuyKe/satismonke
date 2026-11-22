@@ -60,6 +60,20 @@ export class Slideshow {
   }
 }
 
+/**
+ * Floor, four invisible walls and a ceiling around the main-menu platform, so a hard launch can
+ * never send you off the edge (and into endless falling).
+ */
+export function addPlatformColliders(world: CollisionWorld): void {
+  const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+  world.addBox(v(0, -10, 0), v(18, 20, 18), 0.15);                                             // floor: a thick slab (top at y = 0) so nothing can poke out underneath
+  for (const s of [-1, 1]) {
+    world.addBox(v(s * 9.5, 7.5, 0), v(1, 16, 20), 0.2);                                       // side walls
+    world.addBox(v(0, 7.5, s * 9.5), v(20, 16, 1), 0.2);                                       // front/back walls
+  }
+  world.addBox(v(0, 15.5, 0), v(20, 1, 20), 0.2);                                              // ceiling
+}
+
 /** The main-menu "room": a dark platform under the stars, with a big screen showing pictures of the map. */
 export class MenuRoom {
   readonly group = new THREE.Group();
@@ -68,7 +82,7 @@ export class MenuRoom {
 
   constructor(slides: Slide[]) {
     this.world.hull = false;
-    this.world.addBox(new THREE.Vector3(0, -0.3, 0), new THREE.Vector3(18, 0.6, 18), 0.15);
+    addPlatformColliders(this.world);
 
     // platform with a glowing edge
     const floor = new THREE.Mesh(new THREE.BoxGeometry(18, 0.6, 18), new THREE.MeshBasicMaterial({ color: 0x0d1220 }));
@@ -77,6 +91,13 @@ export class MenuRoom {
     edge.position.y = 0.01; this.group.add(edge);
     const inner = new THREE.Mesh(new THREE.BoxGeometry(17.9, 0.08, 17.9), new THREE.MeshBasicMaterial({ color: 0x0d1220 }));
     inner.position.y = 0.02; this.group.add(inner);
+
+    // a faint glowing boundary rail so the invisible walls are not a surprise
+    const rail = new THREE.MeshBasicMaterial({ color: 0x6fe8ff, transparent: true, opacity: 0.35 });
+    for (const s of [-1, 1]) {
+      const a = new THREE.Mesh(new THREE.BoxGeometry(18, 0.05, 0.05), rail); a.position.set(0, 1.1, s * 9); this.group.add(a);
+      const b = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 18), rail); b.position.set(s * 9, 1.1, 0); this.group.add(b);
+    }
 
     // stars
     const pts: number[] = [];

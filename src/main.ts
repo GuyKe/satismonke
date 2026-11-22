@@ -491,6 +491,12 @@ async function boot() {
       hadTouch[i] = h.touching;
     });
 
+    // Safety net: if anything ever puts you outside the world, put you back instead of falling forever
+    const headNow = new THREE.Vector3().copy(player.position).add(camera.position);
+    if (appMode === 'menu' && (headNow.y < -2 || Math.abs(headNow.x) > 9.5 || Math.abs(headNow.z) > 9.5 || headNow.y > 16)) player.teleport(MENU_SPAWN);
+    else if (appMode === 'game' && ship.visible && (headNow.y < -8 || headNow.length() > 14)) player.teleport(SPAWN);
+    else if (appMode === 'game' && planet && !ship.visible && headNow.y < -60) player.teleport(new THREE.Vector3(0, 3, 0));
+
     // Grip + punch: fell trees, smash boulders (stone) and the crashed pod (steel)
     const headW = new THREE.Vector3().copy(player.position).add(camera.position);
     if (planet && appMode === 'game' && !pauseOpen && !ship.visible) {

@@ -157,8 +157,19 @@ export class CollisionWorld {
     return out.normalize();
   }
 
-  /** Push a sphere out of geometry. Mutates p. Returns true if it was touching. */
-  pushOut(p: THREE.Vector3, r: number, nOut: THREE.Vector3): boolean {
+  /**
+   * Push a sphere out of geometry. Mutates p. Returns true if it was touching.
+   * With `preferUp`, a sphere whose centre is already inside something solid climbs straight up out
+   * of it instead of leaving through the nearest face. That stops you dropping through a thin floor
+   * when your head suddenly drops (crouching, sitting down, entering VR).
+   */
+  pushOut(p: THREE.Vector3, r: number, nOut: THREE.Vector3, preferUp = false): boolean {
+    if (preferUp && this.distance(p) < 0) {
+      const y0 = p.y;
+      for (let i = 0; i < 80 && this.distance(p) < r; i++) p.y += 0.1;
+      if (this.distance(p) >= r) { nOut.set(0, 1, 0); return true; }
+      p.y = y0; // no way up (e.g. inside a ceiling): fall back to the normal push
+    }
     let hit = false;
     for (let i = 0; i < 4; i++) {
       const d = this.distance(p);
@@ -179,7 +190,7 @@ export class CollisionWorld {
     const n = new THREE.Vector3();
     for (let i = 0; i < steps; i++) {
       out.add(delta);
-      if (this.pushOut(out, r, n)) { hit = true; nOut.copy(n); }
+      if (this.pushOut(out, r, n, true)) { hit = true; nOut.copy(n); } // hands that end up inside a floor come out of the top
     }
     return hit;
   }
