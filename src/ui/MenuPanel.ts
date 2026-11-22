@@ -2,10 +2,11 @@ import * as THREE from 'three';
 import { Screen } from './Screen';
 import { SaveData, SLOTS, listSlots, formatAgo, formatPlaytime } from '../game/Save';
 import type { Settings, Quality } from '../settings';
-import { CONTROLS_LINES, HOWTO_LINES } from './helpText';
+import { CONTROLS_LINES, HOWTO_LINES, RESOURCE_GUIDE } from './helpText';
 
 const W = 800, H = 500;
-type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings';
+type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide';
+const GUIDE_PER_PAGE = 4;
 
 interface Btn { label: string; x: number; y: number; w: number; h: number; act: () => void; danger?: boolean; dim?: boolean }
 
@@ -32,6 +33,7 @@ export class MenuPanel extends Screen {
   private status = '';
   private statusT = 0;
   private dirty = true;
+  private guidePage = 0;
 
   constructor(private kind: 'main' | 'pause', private h: MenuHandlers, private settings: Settings, width = 2.0) {
     super(width, width * H / W, W, H);
@@ -52,10 +54,10 @@ export class MenuPanel extends Screen {
       labels.map(([label, act], i) => ({ label, act, x: 190, y: y0 + i * (bh + gap), w: 420, h: bh }));
     switch (this.page) {
       case 'main':
-        this.btns = col([['PLAY', () => { this.slots = listSlots(); this.go('slots'); }], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['SETTINGS', () => this.go('settings')]], 140, 66, 14);
+        this.btns = col([['PLAY', () => { this.slots = listSlots(); this.go('slots'); }], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['FIND RESOURCES', () => this.go('guide')], ['SETTINGS', () => this.go('settings')]], 126, 56, 12);
         break;
       case 'pause':
-        this.btns = col([['RESUME', () => this.h.onResume()], ['SAVE GAME', () => this.h.onSave()], ['SETTINGS', () => this.go('settings')], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['SAVE & MAIN MENU', () => this.h.onMainMenu()]], 88, 56, 10);
+        this.btns = col([['RESUME', () => this.h.onResume()], ['SAVE GAME', () => this.h.onSave()], ['SETTINGS', () => this.go('settings')], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['FIND RESOURCES', () => this.go('guide')], ['SAVE & MAIN MENU', () => this.h.onMainMenu()]], 84, 50, 8);
         break;
       case 'slots':
         this.slots = listSlots();
@@ -76,6 +78,16 @@ export class MenuPanel extends Screen {
       case 'controls': case 'howto':
         this.btns = [this.back()];
         break;
+      case 'guide': {
+        const pages = Math.ceil(RESOURCE_GUIDE.length / GUIDE_PER_PAGE);
+        const back = this.back(); back.x = 290; back.w = 220; back.y = 424; back.h = 56;
+        this.btns = [
+          { label: '< PREV', x: 40, y: 424, w: 220, h: 56, act: () => { this.guidePage = (this.guidePage + pages - 1) % pages; this.build(); } },
+          back,
+          { label: 'NEXT >', x: 540, y: 424, w: 220, h: 56, act: () => { this.guidePage = (this.guidePage + 1) % pages; this.build(); } },
+        ];
+        break;
+      }
       case 'settings': {
         const s = this.settings, change = (fn: () => void) => () => { fn(); this.h.onSettings(); this.build(); };
         const qs: Quality[] = ['low', 'medium', 'high'];
@@ -125,13 +137,24 @@ export class MenuPanel extends Screen {
     ctx.fillStyle = '#080c18'; ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 6; ctx.strokeRect(5, 5, W - 10, H - 10);
     ctx.fillStyle = '#ffb347';
-    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS' };
+    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES' };
     ctx.font = this.page === 'main' ? 'bold 72px monospace' : 'bold 48px monospace';
     ctx.fillText(titles[this.page], W / 2, this.page === 'main' ? 110 : 66);
 
     if (this.page === 'controls' || this.page === 'howto') {
       ctx.textAlign = 'left'; ctx.font = '22px monospace'; ctx.fillStyle = '#d8e8f0';
       (this.page === 'controls' ? CONTROLS_LINES : HOWTO_LINES).forEach((l, i) => ctx.fillText(l, 40, 112 + i * 30));
+      ctx.textAlign = 'center';
+    }
+    if (this.page === 'guide') {
+      const pages = Math.ceil(RESOURCE_GUIDE.length / GUIDE_PER_PAGE);
+      ctx.textAlign = 'right'; ctx.fillStyle = '#9ab'; ctx.font = '22px monospace'; ctx.fillText(`${this.guidePage + 1} / ${pages}`, 770, 60); ctx.textAlign = 'left';
+      RESOURCE_GUIDE.slice(this.guidePage * GUIDE_PER_PAGE, (this.guidePage + 1) * GUIDE_PER_PAGE).forEach((r, i) => {
+        const y = 92 + i * 82;
+        ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fillRect(24, y, 752, 76);
+        ctx.fillStyle = r.color; ctx.font = 'bold 26px monospace'; ctx.fillText(r.name, 40, y + 28);
+        ctx.fillStyle = '#d8e8f0'; ctx.font = '19px monospace'; ctx.fillText(r.lines[0], 40, y + 50); ctx.fillText(r.lines[1], 40, y + 70);
+      });
       ctx.textAlign = 'center';
     }
     if (this.page === 'settings') {

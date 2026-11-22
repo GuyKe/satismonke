@@ -8,6 +8,8 @@ import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER, ORE_OWNER, MACHINE_OWN
 import { BuildSystem, Plan, Piece, PieceType, PALETTE, COST as BUILD_COST, COLOR_COST, geometry as pieceGeometry } from './world/BuildSystem';
 import { BuildPanel } from './ui/BuildPanel';
 import { Narrator, LINES, Line } from './ui/Narrator';
+import { Health, Gear, damagePerSecond, fallDamage } from './game/Hazards';
+import { toWorld } from './world/Hub';
 import { Factory, MachineKind, ITEM_NAME } from './game/Factory';
 import { FactoryView, buildMachineMesh } from './world/FactoryView';
 import { MachinePanel, MachineAction } from './ui/MachinePanel';
@@ -99,6 +101,7 @@ async function boot() {
   scene.add(rig);
   const overlay = new Overlay(camera);
   const narrator = new Narrator(camera, () => settings.volume);
+  const health = new Health();
   const say = (key: keyof typeof LINES) => narrator.once(key, [...LINES[key]] as Line[]);
 
   // ---- Progress, crafting, HUDs ----
@@ -201,6 +204,7 @@ async function boot() {
     if (id === 'hub' || id === 'campfire' || id === 'lamp' || isMachine(id)) startPlacing(id);
     if (id === 'lab') say('lab');
     if (id === 'beacon') say('beacon');
+    if (id === 'reactor') say('reactor');
     applyGear();
   };
 
@@ -225,6 +229,8 @@ async function boot() {
     map.showOre = progress.has('scanner');
     factory.alt = { plate: progress.has('altplate'), wire: progress.has('altwire'), smelt: progress.has('altsmelt'), efficiency: progress.has('efficiency') };
     factory.roofSolar = progress.has('solarroof') ? 1.2 : 0;
+    factory.reactor = progress.has('reactor') ? 4 : 0;
+    if (progress.has('bladerunners')) { player.maxSpeed += 4; player.jumpMult += 0.2; }
     planet?.setBeacon(progress.has('beacon'));
   };
 
@@ -322,7 +328,7 @@ async function boot() {
     progress.reset(); placing = null;
     if (ghost) { scene.remove(ghost.group); ghost = null; }
     ghostPose = null; hubUi = null;
-    factory.reset(); factoryView = null; buildSystem = null; setBuild(false); narrator.clearTold(); machinePanel.show(null); linkMode = false; linkFrom = null; selectedMachine = null; hoveredMachine = null;
+    health.reset(); overlay.setTint(0, 0); factory.reset(); factoryView = null; buildSystem = null; setBuild(false); narrator.clearTold(); machinePanel.show(null); linkMode = false; linkFrom = null; selectedMachine = null; hoveredMachine = null;
     for (const t of toasts) scene.remove(t.sprite);
     toasts.length = 0;
     floating = null; map.mesh.visible = craftPanel.mesh.visible = false; map.showOre = false;
@@ -663,6 +669,25 @@ async function boot() {
     else if (appMode === 'game' && ship.visible && (headNow.y < -8 || headNow.length() > 14)) player.teleport(SPAWN);
     else if (appMode === 'game' && planet && !ship.visible && headNow.y < -60) player.teleport(new THREE.Vector3(0, 3, 0));
 
+    // Hazards: poison clouds, radiation and hard landings
+    const gear: Gear = { mask: progress.has('gasmask'), hazmat: progress.has('hazmat'), boots: progress.has('bladerunners') };
+    const landed = player.popLanding();
+    if (planet && appMode === 'game' && !pauseOpen && story.phase === 'planet') {
+      const e = planet.hazardAt(headNow.x, headNow.z);
+      const fd = fallDamage(landed, gear);
+      if (fd > 1) { health.hurt(fd); sfx.hurt(); toast(`Hard landing: -${Math.round(fd)} HP`, headNow.clone().add(new THREE.Vector3(0, 0.5, 0))); }
+      const dps = damagePerSecond(e, gear);
+      if (health.update(simDt, dps)) {
+        const hubP = planet.hub?.pose;
+        player.teleport(hubP ? toWorld([0, 0.95, 0], hubP) : new THREE.Vector3(0, 3, 0)); health.reset(); say('died'); sfx.fail();
+      }
+      if (dps > 0 && Math.random() < dt * 2.2) sfx.hurt();
+      if (e.radiation && Math.random() < dt * (gear.hazmat ? 5 : 20)) sfx.geiger();
+      overlay.setTint(health.flash > 0.02 ? 0xff2020 : e.radiation ? 0x40ff60 : e.poison ? 0xc8e040 : 0x000000, health.flash > 0.02 ? Math.min(0.55, health.flash * 0.6) : dps > 0 ? 0.28 : (e.poison || e.radiation) ? 0.07 : 0);
+      const near = planet.nearestHazard(headNow.x, headNow.z);
+      if (near && near.dist > 0 && near.dist < 30) say(near.kind === 'poison' ? 'poisonNear' : 'radNear');
+    } else overlay.setTint(0, 0);
+
     // Grip + punch: fell trees, smash boulders (stone) and the crashed pod (steel)
     const headW = new THREE.Vector3().copy(player.position).add(camera.position);
     if (planet && appMode === 'game' && !pauseOpen && !ship.visible) {
@@ -854,7 +879,7 @@ async function boot() {
 
     // Wrist displays and the desktop text overlay
     const obj = progress.objective();
-    resourceHud.set(progress); objectiveHud.set(obj);
+    resourceHud.set(progress); objectiveHud.set(obj, health.hp, [gear.mask && 'MASK', gear.hazmat && 'SUIT', gear.boots && 'BOOTS'].filter(Boolean).join(' '));
     hudDom.style.display = appMode === 'game' && planet && !inXR && !pauseOpen ? 'block' : 'none';
     hudDom.textContent = `OBJECTIVE: ${obj[0]}\n${obj[1]}\nwood ${progress.items.wood}  stone ${progress.items.stone}  iron ${progress.items.iron}  copper ${progress.items.copper}  plate ${progress.items.plate}\npower ${factory.power.supply.toFixed(1)} / ${factory.power.demand.toFixed(1)} MW${linkMode ? '   LINK MODE (B stops)' : ''}\n[M] map  [X] craft  [G+punch] hit  [click] use`;
     for (let i = toasts.length - 1; i >= 0; i--) {
@@ -873,7 +898,7 @@ async function boot() {
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    narrator, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    health, narrator, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
     get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },

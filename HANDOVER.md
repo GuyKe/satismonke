@@ -36,6 +36,13 @@ Quest Touch mapping (UNTESTED on hardware): right controller A = `gamepad.button
 - Chop: hold grip and punch a tree at >= 2.2 m/s (`hand.impact` from `GorillaPlayer`). `CollisionWorld` colliders carry an `owner` id (the tree index); `ownerAt(contact)` identifies it and `removeOwner` makes it non-solid. `Planet.fellTree` swaps the instanced tree for a temporary mesh that tips away from you over 1 s, lies there, and after 3 s total disappears and calls `onWood` (2-5 wood by height, +1 for pines). Wood count is shown on the left wrist (`ui/WoodHud.ts`) plus a floating "+N wood" toast; there is no use for wood yet (crafting is a natural next step). Sounds: chop, thump, pickup in `Sfx`.
 - Creatures look away: each creature alternates 4-10 s watching you with 3-8 s looking elsewhere (`look.away`). Curious, defensive and friendly ones also lose interest while looking away and go back to wandering; shy and skittish ones still keep their distance.
 
+## Hazards, gear and the resource guide
+- `game/Hazards.ts` (pure logic, tested): `exposure`, `damagePerSecond` (poison 12/s without a mask; radiation 20/s without a hazmat suit, 10/s with only a mask), `fallDamage` (free up to 10 m/s, then 0.6 x excess^2, x0.2 with boots), `Health`.
+- World: 8 poison zones (tall vents with a toxic plume) and 4 radiation zones (glowing dome, 3 uranium nodes each) toward the edges, 150+ m from the landing site (`Planet.buildHazards`, `hazardAt`, `nearestHazard`). They appear on the map as dashed GAS / RAD circles once you have been within 150 m; VESPER warns when you get within 30 m. Radiation plays Geiger clicks; damage tints the view red, hazards tint it toxic green/yellow (`Overlay.setTint`).
+- Landing speed comes from `GorillaPlayer.popLanding()` (body or hand contact after free fall). Health and gear show on the right wrist (HP bar + MASK / SUIT / BOOTS). Gear recipes (bench): Gas Mask (unlocks after 3 plates), Hazmat Suit (needs the mask), Blade Runners (needs Power Gloves). `applyGear()` applies them; uranium is a new ore/resource (15 resource cells on the left wrist now).
+- Objectives continue: Gas Mask, Hazmat Suit, mine 3 uranium, Nuclear Reactor.
+- FIND RESOURCES: new button in the main menu and the pause menu, a 4-page guide (`RESOURCE_GUIDE` in `ui/helpText.ts`) saying where and how to get each of the 15 resources.
+
 ## Phase 2: building, crashed pods, hub upgrades, advanced automation, sky
 Status against the second brief (names are original: tokens, cores, data drives, Resource Sink, Research Lab, VESPER; the source game's names are not used):
 | Item | Status |
@@ -55,7 +62,7 @@ Status against the second brief (names are original: tokens, cores, data drives,
 | Simulation optimisation | Partly: belt items are positions along a path (no physics), far machines skip animation. No further LOD yet |
 | Artifacts and narrative | Done: VESPER subtitles (and speech where the browser has it) plus eerie alien lines when artifacts are found (`ui/Narrator.ts`, `LINES`) |
 | Research (alt recipes from data drives) | Done: Coated Plates, Braided Wire, Fast Smelting, Efficient Motors. No organic-sample tree yet |
-| Environmental hazards (masks, suits, speed boots) | Not started |
+| Environmental hazards (masks, suits, speed boots) | Done: poison clouds (Gas Mask), radiation zones with uranium nodes (Hazmat Suit; a mask alone halves it), hard landings (Blade Runners: +4 speed cap, +0.2 launch, 80% less fall damage). Health 100 HP, regenerates after 4 s safe, death respawns you at the Hub. Nuclear Reactor hub upgrade (+4 MW day and night) needs uranium |
 Systems: `world/BuildSystem.ts` (+ `ui/BuildPanel.ts`), crash sites in `Planet.buildCrashSites` (`CRASH_OWNER`), purity in `Planet.buildOres`, new machines `splitter` and `sink` and the breaker/overclock logic in `game/Factory.ts` (tests: sections 13 and 14 of `tests/physics.sanity.ts`), sky shader `SKY_FRAG` in `Planet.ts`. Resources added: token, core, drive, artifact. Saves now also hold buildings, looted/discovered pods and splitter settings (still version 2; the new fields are optional).
 
 ## Factory automation (phase 1 of the factory-game vision)

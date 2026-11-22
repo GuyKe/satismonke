@@ -13,7 +13,7 @@ export interface PlanetState {
   felledTrees: number[]; brokenBoulders: number[]; brokenCrystals: number[]; brokenOres: number[];
   podAlive: boolean; podHead: [number, number, number]; podForward: [number, number, number];
   hub: { x: number; y: number; z: number; yaw: number } | null;
-  lootedSites?: number[]; discoveredSites?: number[];
+  lootedSites?: number[]; discoveredSites?: number[]; discoveredZones?: number[];
   props: { kind: 'campfire' | 'lamp'; x: number; z: number }[];
   /** Machines and belts (optional: older saves have none). */
   factory?: FactoryState;

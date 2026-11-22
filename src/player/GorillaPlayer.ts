@@ -40,6 +40,11 @@ export class GorillaPlayer {
   /** Slip of the surface most recently touched by a hand (for the HUD). */
   lastSlip = 0;
   private touchedLast = false;
+  private landing = 0;
+  private preVelY = 0;
+
+  /** The hardest landing since last asked (m/s into a surface), then cleared. */
+  popLanding(): number { const v = this.landing; this.landing = 0; return v; }
   private n = new THREE.Vector3();
 
   /** Runtime gravity in g (not persisted): the capsule is low-g, planets can differ. */
@@ -68,6 +73,7 @@ export class GorillaPlayer {
     const start = this.position.clone();
 
     // 1. Free flight: gravity and integration only while no hand held us last frame.
+    this.preVelY = this.velocity.y;
     if (!this.touchedLast) {
       this.velocity.y -= G * this.gravityG * dt;
       this.velocity.multiplyScalar(1 - 0.05 * dt); // tiny drag keeps 0g from drifting forever
@@ -125,7 +131,7 @@ export class GorillaPlayer {
     if (this.world.pushOut(body, BODY_R, nOut, true)) {
       this.position.add(body.sub(this.position).sub(headLocal).add(new THREE.Vector3(0, BODY_DROP, 0)));
       const into = this.velocity.dot(nOut);
-      if (into < 0) this.velocity.addScaledVector(nOut, -into);
+      if (into < 0) { this.landing = Math.max(this.landing, -into); this.velocity.addScaledVector(nOut, -into); }
     }
 
     // 4. Velocity bookkeeping and launch on release.
@@ -142,6 +148,7 @@ export class GorillaPlayer {
       if (avg.length() > this.maxSpeed) avg.setLength(this.maxSpeed);
       this.velocity.copy(avg);
     }
+    if (touching && !this.touchedLast) this.landing = Math.max(this.landing, Math.max(0, -this.preVelY));
     this.touchedLast = touching;
   }
 }

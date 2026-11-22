@@ -123,6 +123,12 @@ export class MapMenu extends Screen {
     const hub = planet.hub;
     if (hub) { ctx.save(); ctx.translate(X(hub.pose.x), Y(hub.pose.z)); ctx.rotate(-hub.pose.yaw); ctx.fillStyle = '#b8c4d8'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; const w = Math.max(8, 12.4 * k), d = Math.max(5, 5.4 * k); ctx.fillRect(-w / 2, -d / 2, w, d); ctx.strokeRect(-w / 2, -d / 2, w, d); ctx.restore(); }
     for (const pr of planet.props) { ctx.fillStyle = pr.kind === 'campfire' ? '#ff8a30' : '#6ff0ff'; ctx.beginPath(); ctx.arc(X(pr.x), Y(pr.z), 5, 0, 7); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    for (const z of planet.zoneMarks) { // hazard zones: yellow = poison cloud, green = radiation
+      const sx = X(z.x), sy = Y(z.z), rr = Math.max(5, z.r * k);
+      ctx.fillStyle = z.kind === 'poison' ? 'rgba(200,224,64,0.38)' : 'rgba(90,255,106,0.34)'; ctx.beginPath(); ctx.arc(sx, sy, rr, 0, 7); ctx.fill();
+      ctx.strokeStyle = z.kind === 'poison' ? '#e8f060' : '#5aff6a'; ctx.lineWidth = 2; ctx.setLineDash([6, 5]); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = '#10200a'; ctx.font = `bold ${Math.min(26, Math.max(12, rr))}px monospace`; ctx.textAlign = 'center'; ctx.fillText(z.kind === 'poison' ? 'GAS' : 'RAD', sx, sy + 5); ctx.textAlign = 'left';
+    }
     for (const st of planet.siteMarks) { const sx = X(st.x), sy = Y(st.z); ctx.fillStyle = '#ff4a4a'; ctx.beginPath(); ctx.moveTo(sx, sy - 7); ctx.lineTo(sx + 6, sy + 5); ctx.lineTo(sx - 6, sy + 5); ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
     const pod = planet.podPosition;
     if (pod) { ctx.fillStyle = '#ff8a30'; ctx.fillRect(X(pod.x) - 6, Y(pod.z) - 6, 12, 12); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(X(pod.x) - 6, Y(pod.z) - 6, 12, 12); }
@@ -161,7 +167,8 @@ export class MapMenu extends Screen {
     ctx.fillStyle = '#6ff0ff'; ctx.fillText('◆ crystals', MAP.x + 80, MAP.y + MAP.s - 10);
     ctx.fillStyle = '#46d9b0'; ctx.fillText('■ trees', MAP.x + 205, MAP.y + MAP.s - 10);
     ctx.fillStyle = '#fff'; ctx.fillText('■ creatures', MAP.x + 300, MAP.y + MAP.s - 10);
-    ctx.fillStyle = '#ff4a4a'; ctx.fillText('▲ crashed pods', MAP.x + 440, MAP.y + MAP.s - 10);
+    ctx.fillStyle = '#ff4a4a'; ctx.fillText('▲ pods', MAP.x + 440, MAP.y + MAP.s - 10);
+    ctx.fillStyle = '#e8f060'; ctx.fillText('● hazard', MAP.x + 505, MAP.y + MAP.s - 10);
     if (this.showOre) { ctx.fillStyle = '#ffd23a'; ctx.fillText('● ore', MAP.x + 420, MAP.y + MAP.s - 10); }
 
     const hov = new Set(this.hovered.values());

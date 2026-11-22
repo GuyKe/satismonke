@@ -4,6 +4,7 @@ import { GorillaPlayer } from '../src/player/GorillaPlayer';
 import { heightAt } from '../src/world/Terrain';
 import { Progress, RECIPES } from '../src/game/Progress';
 import { Factory } from '../src/game/Factory';
+import { Zone, Gear, exposure, damagePerSecond, fallDamage, Health } from '../src/game/Hazards';
 import { BuildSystem, PALETTE, cellGround } from '../src/world/BuildSystem';
 import { ArmCalibration, REF_SPAN } from '../src/player/ArmCalibration';
 
@@ -151,7 +152,7 @@ function swipe(slip: number): number {
 // 10. More recipes
 {
   const pr = new Progress();
-  check('32 recipes, four in the X menu', RECIPES.length === 32 && RECIPES.filter(r => r.where === 'x').length === 4);
+  check('36 recipes, four in the X menu', RECIPES.length === 36 && RECIPES.filter(r => r.where === 'x').length === 4);
   check('placeables are repeatable', RECIPES.filter(r => r.repeatable).map(r => r.id).join() === 'campfire,lamp,burner,miner,smelter,constructor,storage,conveyor,solar,splitter,sink');
   check('float core locked until 4 crystals', !pr.recipe('floatcore').unlocked(pr) && (pr.add('crystal', 4), pr.recipe('floatcore').unlocked(pr)));
   check('crystal gloves need power gloves first', !pr.recipe('crystalgloves').unlocked(pr) && (pr.crafted.add('gloves'), pr.add('crystal', 4), pr.recipe('crystalgloves').unlocked(pr)));
@@ -279,6 +280,30 @@ function swipe(slip: number): number {
   check('buildings survive save/load', bs2.pieces.length === 2 && bs2.has(wall));
   bs.remove(wall.id);
   check('removing a piece takes its collision with it', w.distance(V((plan1.cx + 1) * 4, top + 1.5, (plan1.cz + 0.5) * 4)) > 0.5 && bs.pieces.length === 1);
+}
+
+// 15. Hazards and gear
+{
+  const zones: Zone[] = [{ kind: 'poison', x: 0, z: 0, r: 20 }, { kind: 'radiation', x: 100, z: 0, r: 20 }, { kind: 'poison', x: 110, z: 5, r: 20 }];
+  const none: Gear = { mask: false, hazmat: false, boots: false };
+  check('zones report what you are standing in', exposure(zones, 5, 5).poison && !exposure(zones, 5, 5).radiation && exposure(zones, 105, 0).radiation && exposure(zones, 105, 0).poison && !exposure(zones, 50, 0).poison);
+  check('poison hurts without a mask and not with one', damagePerSecond({ poison: true, radiation: false }, none) > 0 && damagePerSecond({ poison: true, radiation: false }, { ...none, mask: true }) === 0);
+  check('radiation needs a hazmat suit (a mask halves it)', damagePerSecond({ poison: false, radiation: true }, none) === 20 && damagePerSecond({ poison: false, radiation: true }, { ...none, mask: true }) === 10 && damagePerSecond({ poison: false, radiation: true }, { ...none, hazmat: true }) === 0);
+  check('a hazmat suit does not stop poison', damagePerSecond({ poison: true, radiation: true }, { ...none, hazmat: true }) > 0);
+  check('soft landings are free and hard ones hurt', fallDamage(8, none) === 0 && fallDamage(18, none) > 30);
+  check('Blade Runners cut fall damage by 80%', Math.abs(fallDamage(18, { ...none, boots: true }) - fallDamage(18, none) * 0.2) < 1e-9);
+  const hp = new Health();
+  for (let i = 0; i < 40; i++) hp.update(0.1, 12);
+  check('standing in poison drains health', hp.hp < 60 && hp.hp > 40, `${hp.hp.toFixed(0)} HP after 4 s`);
+  const before = hp.hp; for (let i = 0; i < 100; i++) hp.update(0.1, 0);
+  check('health comes back after a few safe seconds', hp.hp > before + 20);
+  const dying = new Health(); let dead = false; for (let i = 0; i < 100 && !dead; i++) dead = dying.update(0.1, 20);
+  check('enough radiation kills you', dead && dying.hp === 0);
+  const rf = new Factory(); rf.addMachine('miner', 0, 0, 0, 0, { index: 0, type: 'iron', purity: 1 }); rf.reactor = 4; rf.update(1, 0);
+  check('the reactor powers machines at night', rf.power.supply === 4 && rf.power.ratio === 1);
+  const rp = new Progress(); rp.crafted.add('gasmask'); rp.crafted.add('hazmat'); rp.mined.uranium = 2;
+  check('uranium counts as an ore and gates the reactor', rp.oresMined === 2 && !rp.recipe('reactor').unlocked(rp) && (rp.mined.uranium = 3, rp.recipe('reactor').unlocked(rp)));
+  check('hazmat needs the gas mask first', !new Progress().recipe('hazmat').unlocked(new Progress()) && rp.recipe('hazmat').unlocked(rp));
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');

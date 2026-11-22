@@ -1,10 +1,11 @@
-export type Ore = 'copper' | 'iron' | 'gold' | 'plasma';
-export const ORES: Ore[] = ['copper', 'iron', 'gold', 'plasma'];
+export type Ore = 'copper' | 'iron' | 'gold' | 'plasma' | 'uranium';
+export const ORES: Ore[] = ['copper', 'iron', 'gold', 'plasma', 'uranium'];
 export type Res = 'wood' | 'stone' | 'steel' | 'crystal' | Ore | 'plate' | 'wire' | 'token' | 'core' | 'drive' | 'artifact';
 export type Cost = Partial<Record<Res, number>>;
 export type RecipeId = 'hub' | 'campfire' | 'pickaxe' | 'axe' | 'lantern' | 'gloves' | 'sticky' | 'floatcore' | 'crystalgloves' | 'lamp' | 'ironpick' | 'copperlantern' | 'scanner' | 'plasmacore'
   | 'burner' | 'miner' | 'smelter' | 'constructor' | 'storage' | 'solar' | 'conveyor'
-  | 'buildtool' | 'splitter' | 'sink' | 'beacon' | 'solarroof' | 'lab' | 'overclockst' | 'altplate' | 'altwire' | 'altsmelt' | 'efficiency';
+  | 'buildtool' | 'splitter' | 'sink' | 'beacon' | 'solarroof' | 'lab' | 'overclockst' | 'altplate' | 'altwire' | 'altsmelt' | 'efficiency'
+  | 'gasmask' | 'hazmat' | 'bladerunners' | 'reactor';
 
 export interface Recipe {
   id: RecipeId;
@@ -85,6 +86,13 @@ export const RECIPES: Recipe[] = [
     cost: { plate: 6, wire: 4, iron: 6 }, unlocked: p => p.platesCollected >= 3, lockedHint: p => `Collect 3 plates (${Math.min(p.platesCollected, 3)}/3)` },
   { id: 'sink', name: 'Resource Sink', desc: 'Shreds surplus into reward tokens', where: 'bench', repeatable: true,
     cost: { plate: 8, wire: 6, steel: 2 }, unlocked: p => p.platesCollected >= 6, lockedHint: p => `Collect 6 plates (${Math.min(p.platesCollected, 6)}/6)` },
+  // ---- hazard gear ----
+  { id: 'gasmask', name: 'Gas Mask', desc: 'Breathe inside poison clouds', where: 'bench',
+    cost: { plate: 4, wire: 4, crystal: 1 }, unlocked: p => p.platesCollected >= 3, lockedHint: p => `Collect 3 plates (${Math.min(p.platesCollected, 3)}/3)` },
+  { id: 'hazmat', name: 'Hazmat Suit', desc: 'Walk through radiation unharmed', where: 'bench',
+    cost: { plate: 10, wire: 8, steel: 4, crystal: 2 }, unlocked: p => p.has('gasmask'), lockedHint: () => 'Craft the Gas Mask first' },
+  { id: 'bladerunners', name: 'Blade Runners', desc: 'Faster launches, and falls hurt 80% less', where: 'bench',
+    cost: { plate: 8, steel: 4, gold: 1 }, unlocked: p => p.has('gloves'), lockedHint: () => 'Craft Power Gloves first' },
   // ---- Hub upgrades (the Hub's upgrade screen) ----
   { id: 'beacon', name: 'Signal Beacon', desc: 'A towering beam you can see from anywhere', where: 'hub',
     cost: { steel: 4, crystal: 2 }, unlocked: always, lockedHint: noHint },
@@ -94,6 +102,8 @@ export const RECIPES: Recipe[] = [
     cost: { plate: 10, wire: 10, crystal: 2 }, unlocked: p => p.lootOpened >= 1, lockedHint: () => 'Open a crashed pod first' },
   { id: 'overclockst', name: 'Overclock Station', desc: 'Spend cores to overclock machines', where: 'hub',
     cost: { plate: 8, wire: 8, steel: 3 }, unlocked: p => p.has('lab'), lockedHint: () => 'Build the Research Lab first' },
+  { id: 'reactor', name: 'Nuclear Reactor', desc: 'A steady +4 MW of power, day and night', where: 'hub',
+    cost: { uranium: 6, plate: 12, steel: 6 }, unlocked: p => p.mined.uranium >= 3, lockedHint: p => `Mine 3 uranium (${Math.min(p.mined.uranium, 3)}/3): needs a Hazmat Suit` },
   // ---- Research (needs the lab; recipes that need data drives) ----
   { id: 'altplate', name: 'Coated Plates', desc: 'Constructors make 50% more plates', where: 'lab',
     cost: { drive: 1, plate: 10 }, unlocked: p => p.has('lab'), lockedHint: () => 'Build the Research Lab' },
@@ -105,7 +115,7 @@ export const RECIPES: Recipe[] = [
     cost: { drive: 1, plate: 8, crystal: 2 }, unlocked: p => p.has('lab'), lockedHint: () => 'Build the Research Lab' },
 ];
 
-const label: Record<Res, string> = { token: 'token', core: 'core', drive: 'drive', artifact: 'artifact', wood: 'wood', stone: 'stone', steel: 'steel', crystal: 'crystal', copper: 'copper', iron: 'iron', gold: 'gold', plasma: 'plasma', plate: 'plate', wire: 'wire' };
+const label: Record<Res, string> = { uranium: 'uranium', token: 'token', core: 'core', drive: 'drive', artifact: 'artifact', wood: 'wood', stone: 'stone', steel: 'steel', crystal: 'crystal', copper: 'copper', iron: 'iron', gold: 'gold', plasma: 'plasma', plate: 'plate', wire: 'wire' };
 
 export interface ProgressData {
   items: Record<Res, number>; mined: Record<Ore, number>; totalWood: number; totalCrystal: number; treesFelled: number; bouldersBroken: number;
@@ -114,7 +124,7 @@ export interface ProgressData {
 
 /** Inventory, unlock counters and the objective text. In-memory only (not saved yet). */
 export class Progress {
-  items: Record<Res, number> = { token: 0, core: 0, drive: 0, artifact: 0, wood: 0, stone: 0, steel: 0, crystal: 0, copper: 0, iron: 0, gold: 0, plasma: 0, plate: 0, wire: 0 };
+  items: Record<Res, number> = { uranium: 0, token: 0, core: 0, drive: 0, artifact: 0, wood: 0, stone: 0, steel: 0, crystal: 0, copper: 0, iron: 0, gold: 0, plasma: 0, plate: 0, wire: 0 };
   /** Factory progress */
   links = 0;
   fueled = false;
@@ -123,7 +133,7 @@ export class Progress {
   piecesBuilt = 0;
   /** Cosmetic building colours bought with tokens (indices into the palette). */
   colors: number[] = [];
-  mined: Record<Ore, number> = { copper: 0, iron: 0, gold: 0, plasma: 0 };
+  mined: Record<Ore, number> = { copper: 0, iron: 0, gold: 0, plasma: 0, uranium: 0 };
   totalWood = 0;
   totalCrystal = 0;
   treesFelled = 0;
@@ -223,6 +233,10 @@ export class Progress {
     if (!this.has('scanner')) return scan.unlocked(this) ? ['Craft the Ore Scanner', this.describeMissing(scan.cost) || 'Use the bench'] : ['Unlock the Ore Scanner', scan.lockedHint(this)];
     const plasma = this.recipe('plasmacore');
     if (!this.has('plasmacore')) return plasma.unlocked(this) ? ['Craft the Plasma Core', this.describeMissing(plasma.cost) || 'Use the bench'] : ['Find plasma ore', plasma.lockedHint(this) + ' on the lake mesas'];
+    if (!this.has('gasmask')) return ['Craft a Gas Mask', this.describeMissing(this.recipe('gasmask').cost) || 'Poison clouds are marked on the map'];
+    if (!this.has('hazmat')) return ['Craft a Hazmat Suit', this.describeMissing(this.recipe('hazmat').cost) || 'For the radiation zones'];
+    if (this.mined.uranium < 3) return ['Mine uranium', `In radiation zones (${this.mined.uranium}/3)`];
+    if (!this.has('reactor')) return ['Build the Nuclear Reactor', this.describeMissing(this.recipe('reactor').cost) || 'At the Hub upgrade screen'];
     return ['All objectives done', 'Explore!'];
   }
 }

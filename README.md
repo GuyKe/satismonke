@@ -19,6 +19,7 @@ npm run test:physics
 - Push, swipe and swing your hands against surfaces to move. Release to launch.
 - Menu (console at the front of the capsule): point a controller at it, pull the trigger on Play.
 - Factory: at the Hub bench build a Biomass Burner (fuel it with wood), a Miner on ore, a Smelter, a Constructor and a Storage Box, join them with the Conveyor Link tool, and aim at any machine to see its status.
+- Hazards: grey-yellow GAS clouds and green RAD zones hurt you; craft a Gas Mask, then a Hazmat Suit. Blade Runners soften hard landings. The pause and main menus have a FIND RESOURCES guide.
 - Build: X > Build Tool for foundations, walls and catwalks. Crashed pods around the map hold loot. The Hub has upgrade and research screens on its front wall. The map shows an arrow to your Hub if you get lost.
 - Settings (volume, laser, graphics) are in the main menu and the pause menu.
 - Start at the main menu (PLAY, CONTROLS, HOW TO PLAY) with three save slots. Y (or Esc) opens the pause menu in game.

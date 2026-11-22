@@ -4,6 +4,7 @@ import * as THREE from 'three';
 export class Overlay {
   private black: THREE.Mesh;
   private title: THREE.Mesh;
+  private tint: THREE.Mesh;
 
   constructor(camera: THREE.Camera, text = 'SATISMONKE') {
     const common = { transparent: true, depthTest: false, depthWrite: false, toneMapped: false, fog: false } as const;
@@ -29,8 +30,17 @@ export class Overlay {
     this.title.renderOrder = 1001;
     this.title.frustumCulled = false;
 
+    // a full-view tint for pain and hazards (red, toxic green)
+    this.tint = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshBasicMaterial({ color: 0xff2020, opacity: 0, ...common }));
+    this.tint.position.z = -0.3; this.tint.renderOrder = 990; this.tint.frustumCulled = false; this.tint.visible = false;
     this.black.visible = this.title.visible = false;
-    camera.add(this.black, this.title);
+    camera.add(this.black, this.title, this.tint);
+  }
+
+  /** Tint the whole view (0 = off). */
+  setTint(color: number, alpha: number): void {
+    const m = this.tint.material as THREE.MeshBasicMaterial;
+    m.color.set(color); m.opacity = alpha; this.tint.visible = alpha > 0.005;
   }
 
   set(blackAlpha: number, titleAlpha: number): void {

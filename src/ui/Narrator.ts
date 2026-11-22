@@ -90,5 +90,9 @@ export const LINES = {
   sink: [V('Surplus shredded for tokens. Waste not, want not, report not.')],
   build: [V('Foundations. Remember: a building is just a very optimistic floor.')],
   overclock: [V('Overclocking. The machine did not consent, but it lacks a legal department.')],
+  poisonNear: [V('Warning: toxic atmosphere ahead. Halcyon reminds you that breathing is a privilege, not a right.')],
+  radNear: [V('Radiation ahead. The glow is a free nightlight, with side effects.')],
+  died: [V('You have died. Halcyon has already hired your replacement. It is you, again.')],
+  reactor: [V('A reactor. What could possibly go wrong. Please do not answer that.')],
   beacon: [V('Beacon active. You can now be found, which the pioneer safety handbook calls a feature.')],
 } as const;

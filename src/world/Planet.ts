@@ -7,6 +7,7 @@ import { buildCampfire, buildLamp, PropKind, PropMesh } from './Props';
 import type { PlanetState } from '../game/Save';
 import type { Ore } from '../game/Progress';
 import type { Quality } from '../settings';
+import { Zone, exposure } from '../game/Hazards';
 import { heightAt, buildTerrainMesh, pathMask, PONDS, LAKE, pondY, WATER_Y } from './Terrain';
 import { makeWater } from './Animals';
 
@@ -31,6 +32,7 @@ export const ORE_DEF: Record<Ore, { color: number; rock: number; hits: number; y
   iron: { color: 0x8fa6c8, rock: 0x464c58, hits: 3, yield: [2, 3], glow: 0 },
   gold: { color: 0xffd23a, rock: 0x5c554a, hits: 3, yield: [1, 2], glow: 0.3 },
   plasma: { color: 0xc04dff, rock: 0x362b48, hits: 4, yield: [1, 1], glow: 1.4 },
+  uranium: { color: 0x7dff5a, rock: 0x233323, hits: 4, yield: [1, 2], glow: 1.5 },
 };
 interface OreRec { type: Ore; x: number; y: number; z: number; r: number; hits: number; broken: boolean; slot: number; purity: number }
 export type Loot = Partial<Record<'steel' | 'plate' | 'wire' | 'crystal' | 'core' | 'drive' | 'artifact', number>>;
@@ -174,6 +176,9 @@ export class Planet {
   onTreeLanded: ((pos: THREE.Vector3) => void) | null = null;
   private oreRecs: OreRec[] = [];
   private oreOccupied = new Set<number>();
+  readonly zones: Zone[] = [];
+  private zoneFound = new Set<number>();
+  private zoneMats: THREE.MeshBasicMaterial[] = [];
   private siteRecs: SiteRec[] = [];
   private siteMesh!: THREE.InstancedMesh;
   private siteLights!: THREE.InstancedMesh;
@@ -253,6 +258,7 @@ export class Planet {
     this.buildBoulders(rng);
     this.buildMesas(rng);
     this.buildCrystals(rng);
+    this.buildHazards(rng);
     this.buildOres(rng);
     this.buildCrashSites(rng);
     this.buildFloatingRocks(rng);
@@ -537,6 +543,12 @@ export class Planet {
       for (let k = 0; k < (mr > 40 ? 2 : 1); k++) { const a = rng() * Math.PI * 2, d = rng() * mr * 0.6; spots.push({ type: 'plasma', x: mx + Math.cos(a) * d, y: this.mesaTops[i], z: mz + Math.sin(a) * d, r: 1.1 + rng() * 0.5 }); }
     });
 
+    // uranium: only inside the radiation zones
+    for (const z of this.zones) if (z.kind === 'radiation') for (let k = 0; k < 3; k++) {
+      const a = rng() * Math.PI * 2, d = rng() * z.r * 0.6, x = z.x + Math.cos(a) * d, zz = z.z + Math.sin(a) * d;
+      spots.push({ type: 'uranium', x, y: heightAt(x, zz), z: zz, r: 1.0 + rng() * 0.5 });
+    }
+
     // one rock mesh + one glowing-specks mesh per ore type, sharing instance matrices
     const rockGeo = new THREE.IcosahedronGeometry(1, 1);
     const speckParts: THREE.BufferGeometry[] = [];
@@ -599,6 +611,54 @@ export class Planet {
     this.world.finalize();
   }
   removeMachineCollider(id: number): void { this.world.removeOwner(MACHINE_OWNER + id); }
+
+  /** Poison clouds and radiation zones out toward the edges of the world. */
+  private buildHazards(rng: () => number): void {
+    const nPoison = Math.max(3, Math.round(8 * this.q.crystals)), nRad = Math.max(2, Math.round(4 * this.q.crystals));
+    const place = (kind: Zone['kind'], r: number) => {
+      for (let t = 0; t < 40; t++) {
+        const c = this.dryPoint(rng, 150, WORLD_R - 40, ABOVE_WATER + 1);
+        if (this.zones.some(z => Math.hypot(z.x - c.x, z.z - c.z) < z.r + r + 50)) continue;
+        this.zones.push({ kind, x: c.x, z: c.z, r }); return;
+      }
+    };
+    for (let i = 0; i < nRad; i++) place('radiation', 28 + rng() * 8);
+    for (let i = 0; i < nPoison; i++) place('poison', 24 + rng() * 10);
+    const poisonMat = new THREE.MeshBasicMaterial({ color: 0x9fd020, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide });
+    const radMat = new THREE.MeshBasicMaterial({ color: 0x40ff60, transparent: true, opacity: 0.14, depthWrite: false, side: THREE.DoubleSide });
+    const groundP = new THREE.MeshBasicMaterial({ color: 0x9ab020, transparent: true, opacity: 0.35, depthWrite: false });
+    const groundR = new THREE.MeshBasicMaterial({ color: 0x20a040, transparent: true, opacity: 0.35, depthWrite: false });
+    this.zoneMats = [poisonMat, radMat];
+    const rock = new THREE.MeshStandardMaterial({ color: 0x3a3a30, roughness: 1, flatShading: true });
+    for (const z of this.zones) {
+      const y = heightAt(z.x, z.z);
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(z.r, 28).rotateX(-Math.PI / 2), z.kind === 'poison' ? groundP : groundR);
+      disc.position.set(z.x, y + 0.25, z.z); disc.renderOrder = 2; this.group.add(disc);
+      if (z.kind === 'poison') { // tall vents venting a toxic plume
+        for (let k = 0; k < 4; k++) {
+          const a = rng() * Math.PI * 2, d = rng() * z.r * 0.6, x = z.x + Math.cos(a) * d, zz = z.z + Math.sin(a) * d, gy = heightAt(x, zz);
+          const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 1.4, 5, 7), rock); vent.position.set(x, gy + 2.2, zz); this.group.add(vent);
+          this.world.addCylinder(x, zz, gy - 1, gy + 5, 1.0, 0.3);
+          const plume = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 1.2, 38, 10, 1, true), poisonMat); plume.position.set(x, gy + 21, zz); this.group.add(plume);
+        }
+      } else { // a glowing dome over the zone
+        const dome = new THREE.Mesh(new THREE.SphereGeometry(z.r, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2), radMat);
+        dome.position.set(z.x, y, z.z); this.group.add(dome);
+      }
+    }
+  }
+
+  /** Hazards at a point (poison cloud and/or radiation). */
+  hazardAt(x: number, z: number): { poison: boolean; radiation: boolean } { return exposure(this.zones, x, z); }
+
+  /** Zones the player has been near (shown on the map). */
+  get zoneMarks(): Zone[] { return this.zones.filter((_, i) => this.zoneFound.has(i)); }
+  /** Distance to the edge of the nearest hazard (negative = inside) and its kind. */
+  nearestHazard(x: number, z: number): { kind: Zone['kind']; dist: number } | null {
+    let best: { kind: Zone['kind']; dist: number } | null = null;
+    for (const zn of this.zones) { const d = Math.hypot(x - zn.x, z - zn.z) - zn.r; if (!best || d < best.dist) best = { kind: zn.kind, dist: d }; }
+    return best;
+  }
 
   /** Other crashed pods scattered around the world. Punch the hatch three times to open one. */
   private buildCrashSites(rng: () => number): void {
@@ -712,6 +772,7 @@ export class Planet {
       podHead: [this.podHead.x, this.podHead.y, this.podHead.z], podForward: [this.podForward.x, this.podForward.y, this.podForward.z],
       hub: this.hub ? { ...this.hub.pose } : null,
       props: this.propList.map(p => ({ kind: p.kind, x: p.x, z: p.z })),
+      discoveredZones: [...this.zoneFound],
       lootedSites: ids(this.siteRecs.map(s => ({ broken: s.looted }))), discoveredSites: this.siteRecs.flatMap((s, i) => (s.discovered ? [i] : [])),
     };
   }
@@ -732,6 +793,7 @@ export class Planet {
     this.crystalMesh.instanceMatrix.needsUpdate = true;
     for (const i of s.brokenOres) { const o = this.oreRecs[i]; if (!o) continue; o.broken = true; owners.add(ORE_OWNER + i); this.hideOre(o); }
     for (const i of s.lootedSites ?? []) { const t = this.siteRecs[i]; if (!t) continue; t.looted = true; owners.add(CRASH_OWNER + i); this.siteMesh.setMatrixAt(i, zero); this.siteLights.setMatrixAt(i, zero); }
+    for (const i of s.discoveredZones ?? []) this.zoneFound.add(i);
     for (const i of s.discoveredSites ?? []) { const t = this.siteRecs[i]; if (t) t.discovered = true; }
     this.siteMesh.instanceMatrix.needsUpdate = this.siteLights.instanceMatrix.needsUpdate = true;
     this.world.removeOwners(owners);
@@ -915,6 +977,8 @@ export class Planet {
     wm.emissiveIntensity = 0.35 + 0.5 * night + 0.25 * duskAmt;
 
     for (const s of this.siteRecs) if (!s.discovered && Math.hypot(s.x - head.x, s.z - head.z) < 120) s.discovered = true;
+    this.zones.forEach((zn, i) => { if (Math.hypot(zn.x - head.x, zn.z - head.z) < zn.r + 150) this.zoneFound.add(i); });
+    if (this.zoneMats.length) { this.zoneMats[0].opacity = 0.3 + 0.08 * Math.sin(this.animalTime * 1.7); this.zoneMats[1].opacity = 0.14 + 0.05 * Math.sin(this.animalTime * 2.3); }
     if (this.siteLights && this.siteRecs.length) { const on = Math.sin(this.animalTime * 4) > 0.2; const c = new THREE.Color(on ? 0xff3030 : 0x401010); for (let i = 0; i < this.siteRecs.length; i++) this.siteLights.setColorAt(i, c); if (this.siteLights.instanceColor) this.siteLights.instanceColor.needsUpdate = true; }
     if (this.hubBeam) (this.hubBeam.material as THREE.MeshBasicMaterial).opacity = (this.beaconOn ? 0.2 : 0.14) + 0.07 * Math.sin(this.animalTime * 2);
     this.updateFireflies(night, follow);

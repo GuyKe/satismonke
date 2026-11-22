@@ -73,6 +73,8 @@ export class Factory {
   alt = { plate: false, wire: false, smelt: false, efficiency: false };
   /** Extra daytime power from the Hub's solar roof (MW at full sun). */
   roofSolar = 0;
+  /** Constant extra power from the Hub's nuclear reactor (MW). */
+  reactor = 0;
   /** Reward tokens earned by the Resource Sink and not yet collected. */
   tokens = 0;
   tripped = false;
@@ -81,7 +83,7 @@ export class Factory {
 
   reset(): void {
     this.machines = []; this.links = []; this.nextId = 1; this.clock = 0; this.minerMult = 1; this.tokens = 0; this.tripped = false;
-    this.alt = { plate: false, wire: false, smelt: false, efficiency: false }; this.roofSolar = 0;
+    this.alt = { plate: false, wire: false, smelt: false, efficiency: false }; this.roofSolar = 0; this.reactor = 0;
     this.power = { supply: 0, demand: 0, ratio: 1 };
   }
 
@@ -154,7 +156,7 @@ export class Factory {
     this.clock += dt;
 
     // ---- power ----
-    let supply = this.roofSolar * daylight, demand = 0;
+    let supply = this.roofSolar * daylight + this.reactor, demand = 0;
     for (const m of this.machines) {
       if (m.kind === 'burner') { if (m.fuel > 0) supply += -MACHINE_POWER.burner; }
       else if (m.kind === 'solar') supply += -MACHINE_POWER.solar * daylight;

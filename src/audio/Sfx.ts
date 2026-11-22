@@ -222,6 +222,27 @@ export class Sfx {
     o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.25);
   }
 
+  /** You got hurt: a dull thud with a rasp. */
+  hurt(): void {
+    if (!this.ctx) return;
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(120, t); o.frequency.exponentialRampToValueAtTime(50, t + 0.25);
+    const g = c.createGain(); g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    o.connect(g); g.connect(this.master); o.start(t); o.stop(t + 0.35);
+    const n = this.noiseSource(false), bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900;
+    const ng = c.createGain(); ng.gain.setValueAtTime(0.4, t); ng.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    n.connect(bp); bp.connect(ng); ng.connect(this.master); n.start(t); n.stop(t + 0.2);
+  }
+
+  /** One Geiger-counter click. */
+  geiger(): void {
+    if (!this.ctx) return;
+    const c = this.ctx, t = c.currentTime;
+    const n = this.noiseSource(false), hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 3500;
+    const g = c.createGain(); g.gain.setValueAtTime(0.35, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.02);
+    n.connect(hp); hp.connect(g); g.connect(this.master); n.start(t); n.stop(t + 0.03);
+  }
+
   /** Keep the 3D audio listener on the player's head. */
   setListener(pos: { x: number; y: number; z: number }, fwd: { x: number; y: number; z: number }): void {
     if (!this.ctx) return;
