@@ -10,6 +10,7 @@ import { BuildPanel } from './ui/BuildPanel';
 import { Narrator, LINES, Line } from './ui/Narrator';
 import { D } from './ui/dialogue';
 import { Net } from './net/Multiplayer';
+import { Voice } from './net/Voice';
 import { RemotePlayers } from './world/RemotePlayers';
 import { PlayerModel } from './world/PlayerModel';
 import { Health, Gear, damagePerSecond, fallDamage } from './game/Hazards';
@@ -365,11 +366,18 @@ async function boot() {
   const net = new Net();
   const remotes = new RemotePlayers();
   scene.add(remotes.group);
+  const voice = new Voice();
   const lobbyInfo = () => net.state === 'off' ? null : {
-    code: net.code, isHost: net.isHost, status: net.state, error: net.error,
+    mic: voice.state, code: net.code, isHost: net.isHost, status: net.state, error: net.error,
     players: net.list.map(p => ({ name: p.name + (p.id === net.me.id ? ' (you)' : ''), color: p.color })),
   };
-  const refreshLobby = () => { const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); remotes.setPlayers(net.list, net.me.id); };
+  const refreshLobby = () => {
+    const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); remotes.setPlayers(net.list, net.me.id);
+    if (net.state === 'lobby' || net.state === 'game') {
+      void voice.sync(net.peerObj, net.me.id, net.list.map(p => p.id)).then(() => { const l2 = lobbyInfo(); mainPanel.setLobby(l2); pausePanel.setLobby(l2); });
+    } else voice.stop();
+  };
+  const toggleMic = () => { voice.toggleMute(); const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); };
   net.onChange = refreshLobby;
   net.onPose = (id, p) => remotes.pose(id, p);
   net.onLeave = id => remotes.remove(id);
@@ -461,6 +469,7 @@ async function boot() {
     onJoin: code => net.join(code),
     onLeaveLobby: () => leaveLobby(),
     onStartLobby: () => net.start(),
+    onToggleMic: () => toggleMic(),
   };
   const mainPanel = new MenuPanel('main', handlers, settings, 2.0);
   mainPanel.mesh.position.set(0, 1.05, -1.7);
@@ -518,6 +527,7 @@ async function boot() {
   const btn = (i: number, b: number) => !!inputs[i]?.gamepad?.buttons[b]?.pressed;
   const handBtn = (hand: 'left' | 'right', b: number) => [0, 1].some(i => inputs[i]?.handedness === hand && btn(i, b));
   const keys = { a: false, b: false, x: false, grip: false, menu: false };
+  addEventListener('keydown', e => { if (e.code === 'KeyV' && net.state !== 'off') toggleMic(); });
   const keyMap: Record<string, keyof typeof keys> = { KeyM: 'a', KeyB: 'b', KeyX: 'x', KeyG: 'grip', Escape: 'menu' };
   addEventListener('keydown', e => { const k = keyMap[e.code]; if (k) keys[k] = true; });
   addEventListener('keyup', e => { const k = keyMap[e.code]; if (k) keys[k] = false; });
@@ -1061,6 +1071,10 @@ async function boot() {
       if (factoryDirty || snapT >= 1) { snapT = 0; factoryDirty = false; net.broadcastFactory(factory.toJSON()); }
       if (buildSystem && buildSystem.version !== sentBuildV) { sentBuildV = buildSystem.version; net.broadcastBuild(buildSystem.toJSON()); }
     }
+    if (net.state === 'lobby' || net.state === 'game') {
+      voice.update(camera, id => remotes.headOf(id));
+      for (const p of net.list) if (p.id !== net.me.id) remotes.setSpeaking(p.id, voice.speaking(p.id));
+    }
     if (appMode === 'game' && net.state === 'game') {
       net.tick(dt, () => {
         const q = camera.getWorldQuaternion(new THREE.Quaternion());
@@ -1093,7 +1107,7 @@ async function boot() {
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    health, narrator, net, remotes, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    health, narrator, net, remotes, voice, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
     get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },

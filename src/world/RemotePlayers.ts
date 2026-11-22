@@ -25,6 +25,8 @@ class Avatar {
     this.model.visible = false;
   }
 
+  setSpeaking(on: boolean): void { (this.tag.material as THREE.SpriteMaterial).color.set(on ? 0x7fffa0 : 0xffffff); this.tag.scale.setScalar(1); this.tag.scale.set(on ? 0.7 : 0.6, on ? 0.175 : 0.15, 1); }
+
   step(k: number, dt: number): void {
     if (!this.seen) return;
     const t = this.target;
@@ -61,6 +63,10 @@ export class RemotePlayers {
   get positions(): { name: string; color: number; x: number; z: number }[] {
     return [...this.avatars.values()].filter(a => a.seen).map(a => ({ name: a.info.name, color: a.info.color, x: a.head.x, z: a.head.z }));
   }
+  /** A friend's head position (for voice). */
+  headOf(id: string): THREE.Vector3 | null { const a = this.avatars.get(id); return a && a.seen ? a.head : null; }
+  /** Light up a friend's name tag while they talk. */
+  setSpeaking(id: string, on: boolean): void { const a = this.avatars.get(id); if (a) a.setSpeaking(on); }
   get count(): number { return this.avatars.size; }
   update(dt: number): void { const k = 1 - Math.exp(-14 * dt); for (const a of this.avatars.values()) a.step(k, dt); }
 }
