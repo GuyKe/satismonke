@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CollisionWorld } from '../src/physics/CollisionWorld';
 import { GorillaPlayer } from '../src/player/GorillaPlayer';
+import { heightAt } from '../src/world/Terrain';
 import { ArmCalibration, REF_SPAN } from '../src/player/ArmCalibration';
 
 let failed = 0;
@@ -84,6 +85,29 @@ function swipe(slip: number): number {
   const w = new CollisionWorld(); w.addBox(V(0, 0, 0), V(2, 0.02, 2));
   const out = V(0, 0, 0), n = V(0, 0, 0);
   check('fast hand cannot tunnel through a thin bar', w.sweep(V(0, 0.5, 0), V(0, -0.5, 0), 0.07, out, n) && out.y > 0);
+}
+
+// 7. Terrain heightfield: flat at spawn, hills further out, hands can't sink into slopes
+{
+  const w = new CollisionWorld(); w.hull = false; w.heightFn = heightAt;
+  check('terrain is flat at the landing spot', heightAt(0, 0) === 0 && Math.abs(heightAt(5, 5)) < 1e-9);
+  let lo = 0, hi = 0;
+  for (let x = -300; x <= 300; x += 5) for (let z = -300; z <= 300; z += 5) { const h = heightAt(x, z); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+  check('terrain has hills and basins', hi > 6 && lo < -6, `range ${lo.toFixed(1)}..${hi.toFixed(1)} m`);
+  const out = V(0, 0, 0), n = V(0, 0, 0);
+  let bad = 0;
+  for (let i = 0; i < 200; i++) { // fast hand strikes from above onto random hill points
+    const x = -250 + (i * 37) % 500, z = -250 + (i * 91) % 500, h = heightAt(x, z);
+    w.sweep(V(x, h + 2, z), V(x, h - 1.5, z), 0.07, out, n);
+    if (out.y < heightAt(out.x, out.z) - 0.02) bad++;
+  }
+  check('hands never end up inside the terrain', bad === 0, `${bad} bad`);
+  const p = new GorillaPlayer(w, settings());
+  p.teleport(V(120, heightAt(120, 80) + 0.2, 80));
+  const hs = [V(-0.3, 1.0, -0.3), V(0.3, 1.0, -0.3)];
+  for (let i = 0; i < 300; i++) p.update(dt, head, hs);
+  const hy = p.position.y + head.y - heightAt(p.position.x, p.position.z);
+  check('legless torso rests on a hillside', hy > 0.5 && hy < 0.95, `head ${hy.toFixed(2)} m above ground`);
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');

@@ -223,7 +223,7 @@ async function boot() {
   });
 
   // Exposed for debugging / automated tests
-  (window as unknown as Record<string, unknown>).__game = { look: (y: number, p: number) => { yaw = y; pitch = p; }, player, story, settings, menu, get planet() { return planet; } };
+  (window as unknown as Record<string, unknown>).__game = { renderer, scene, look: (y: number, p: number) => { yaw = y; pitch = p; }, player, story, settings, menu, get planet() { return planet; } };
 }
 
 boot();

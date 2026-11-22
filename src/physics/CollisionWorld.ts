@@ -18,6 +18,8 @@ export class CollisionWorld {
   hullSlip = 0.35;
   groundY: number | null = null;
   groundSlip = 0.1;
+  /** Optional terrain: height of the ground at (x, z). Slopes are handled by dividing by the gradient length. */
+  heightFn: ((x: number, z: number) => number) | null = null;
   readonly boxes: BoxCollider[] = [];
   readonly spheres: SphereCollider[] = [];
   readonly cylinders: CylinderCollider[] = [];
@@ -45,6 +47,13 @@ export class CollisionWorld {
     }
     if (this.groundY !== null) {
       const g = p.y - this.groundY;
+      if (g < d) { d = g; slip = this.groundSlip; }
+    }
+    if (this.heightFn) {
+      const f = this.heightFn, e = 0.4;
+      const gx = (f(p.x + e, p.z) - f(p.x - e, p.z)) / (2 * e);
+      const gz = (f(p.x, p.z + e) - f(p.x, p.z - e)) / (2 * e);
+      const g = (p.y - f(p.x, p.z)) / Math.sqrt(1 + gx * gx + gz * gz);
       if (g < d) { d = g; slip = this.groundSlip; }
     }
     for (const b of this.boxes) {
