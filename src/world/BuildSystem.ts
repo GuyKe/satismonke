@@ -56,6 +56,8 @@ const CAP = 700;
 export class BuildSystem {
   readonly group = new THREE.Group();
   pieces: Piece[] = [];
+  /** Bumps on every change (multiplayer sends a snapshot when it moves). */
+  version = 0;
   private next = 1;
   private meshes: Record<'foundation' | 'wall' | 'deck' | 'rail' | 'pillar', THREE.InstancedMesh>;
   private order: Record<'foundation' | 'wall' | 'deck', number[]> = { foundation: [], wall: [], deck: [] };
@@ -115,7 +117,7 @@ export class BuildSystem {
     this.pieces.push(piece);
     const g = geometry(piece);
     this.world.addBox(g.center, g.size, 0.15, 0, BUILD_OWNER + piece.id);
-    this.rebuild();
+    this.rebuild(); this.version++;
     return piece;
   }
 
@@ -124,7 +126,7 @@ export class BuildSystem {
     if (i < 0) return false;
     this.pieces.splice(i, 1);
     this.world.removeOwner(BUILD_OWNER + id);
-    this.rebuild();
+    this.rebuild(); this.version++;
     return true;
   }
 
@@ -174,6 +176,6 @@ export class BuildSystem {
     for (const p of this.pieces) this.world.removeOwner(BUILD_OWNER + p.id);
     this.pieces = []; this.next = s.next;
     for (const p of s.pieces) { this.pieces.push({ ...p }); const g = geometry(p); this.world.addBox(g.center, g.size, 0.15, 0, BUILD_OWNER + p.id); }
-    this.rebuild();
+    this.rebuild(); this.version++;
   }
 }

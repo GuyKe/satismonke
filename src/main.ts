@@ -5,7 +5,7 @@ import { GorillaPlayer } from './player/GorillaPlayer';
 import { ArmCalibration } from './player/ArmCalibration';
 import { buildCapsule } from './world/Capsule';
 import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER, ORE_OWNER, MACHINE_OWNER, CRASH_OWNER, Loot, Harvest } from './world/Planet';
-import { BuildSystem, Plan, Piece, PieceType, PALETTE, COST as BUILD_COST, COLOR_COST, geometry as pieceGeometry } from './world/BuildSystem';
+import { BuildSystem, BuildState, Plan, Piece, PieceType, PALETTE, COST as BUILD_COST, COLOR_COST, geometry as pieceGeometry } from './world/BuildSystem';
 import { BuildPanel } from './ui/BuildPanel';
 import { Narrator, LINES, Line } from './ui/Narrator';
 import { D } from './ui/dialogue';
@@ -14,7 +14,7 @@ import { RemotePlayers } from './world/RemotePlayers';
 import { PlayerModel } from './world/PlayerModel';
 import { Health, Gear, damagePerSecond, fallDamage } from './game/Hazards';
 import { toWorld } from './world/Hub';
-import { Factory, MachineKind, ITEM_NAME } from './game/Factory';
+import { Factory, MachineKind, ITEM_NAME, FactoryState } from './game/Factory';
 import { FactoryView, buildMachineMesh } from './world/FactoryView';
 import { MachinePanel, MachineAction } from './ui/MachinePanel';
 import { MenuRoom, Slide } from './world/MenuRoom';
@@ -236,9 +236,11 @@ async function boot() {
       lantern.position.set(0, -0.2, -0.2); camera.add(lantern);
     } else camera.remove(lantern);
     map.showOre = progress.has('scanner');
-    factory.alt = { plate: progress.has('altplate'), wire: progress.has('altwire'), smelt: progress.has('altsmelt'), efficiency: progress.has('efficiency') };
-    factory.roofSolar = progress.has('solarroof') ? 1.2 : 0;
-    factory.reactor = progress.has('reactor') ? 4 : 0;
+    if (!(net.state === 'game' && !net.isHost)) { // in a lobby the host's factory settings rule (they arrive with its snapshots)
+      factory.alt = { plate: progress.has('altplate'), wire: progress.has('altwire'), smelt: progress.has('altsmelt'), efficiency: progress.has('efficiency') };
+      factory.roofSolar = progress.has('solarroof') ? 1.2 : 0;
+      factory.reactor = progress.has('reactor') ? 4 : 0;
+    }
     if (progress.has('bladerunners')) { player.maxSpeed += 4; player.jumpMult += 0.2; }
     planet?.setBeacon(progress.has('beacon'));
   };
@@ -371,16 +373,40 @@ async function boot() {
   net.onChange = refreshLobby;
   net.onPose = (id, p) => remotes.pose(id, p);
   net.onLeave = id => remotes.remove(id);
-  net.onWorld = (k, i) => planet?.applyRemote(k as Harvest, i);
+  net.onWorld = (k, i, d) => applyWorldEvent(k, i, d);
   net.onClock = c => { if (planet && Math.abs(planet.clock - c) > 1.5) planet.clock = c; };
   net.getClock = () => planet?.clock ?? 40;
+  let factoryDirty = false, snapT = 0, sentBuildV = -1;
+  const markFactory = () => { factoryDirty = true; };
+  const applyWorldEvent = (k: string, i: number, d?: number[]) => {
+    if (!planet) return;
+    if (k === 'hub') { if (!planet.hub && d) { const built = planet.placeHub(d[0], d[1], d[2], d[3]); progress.hubPlaced = true; progress.crafted.add('hub'); buildHubUi(built); } }
+    else if (k === 'prop') { if (d) planet.placeProp(d[0] === 0 ? 'campfire' : 'lamp', d[1], d[2]); }
+    else planet.applyRemote(k as Harvest, i);
+  };
+  const applyFactoryState = (d: unknown) => {
+    if (!planet || !factoryView || net.isHost) return;
+    const diff = factory.applyState(d as FactoryState), at = (id: number) => { const m = factory.get(id); return m ? new THREE.Vector3(m.x, m.y, m.z) : null; };
+    for (const l of diff.removedL) factoryView.removeLink(l.id);
+    for (const m of diff.removedM) {
+      if (m.ore) planet.setOreOccupied(m.ore.index, false);
+      factoryView.removeMachine(m.id); planet.removeMachineCollider(m.id);
+      if (selectedMachine === m.id) { selectedMachine = null; machinePanel.show(null); }
+    }
+    for (const m of diff.addedM) { factoryView.addMachine(m); planet.addMachineCollider(m.id, m.x, m.y, m.z); if (m.ore) planet.setOreOccupied(m.ore.index, true); }
+    for (const l of diff.addedL) { const a = at(l.from), b = at(l.to); if (a && b) factoryView.addLink(l, a, b); }
+  };
+  net.onOp = (from, op) => hostOp(from, op);
+  net.onFactory = applyFactoryState;
+  net.onBuild = d => { if (buildSystem && !net.isHost) buildSystem.load(d as BuildState); };
+  net.snapshots = () => ({ f: factory.toJSON(), b: buildSystem?.toJSON() ?? null });
   net.onStart = clock => { if (appMode !== 'game' || currentSlot >= 0) beginMultiplayer(clock); };
   const leaveLobby = () => { net.leave(); remotes.clear(); const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); };
   const beginMultiplayer = (clock: number) => {
     resetGame();
     currentSlot = -1; appMode = 'game'; menuRoom.group.visible = false; autosave = 0; playSeconds = 0;
     startPlanet(null); story.phase = 'planet';
-    if (planet) { planet.clock = clock; for (const [k, i] of net.worldLog) planet.applyRemote(k as Harvest, i); }
+    if (planet) { planet.clock = clock; for (const [k, i, d] of net.worldLog) applyWorldEvent(k, i, d); if (!net.isHost) { if (net.lastFactory) applyFactoryState(net.lastFactory); if (net.lastBuild && buildSystem) buildSystem.load(net.lastBuild as BuildState); } }
     // spread friends out a little so nobody lands inside anyone else
     const idx = Math.max(0, net.list.map(p => p.id).sort().indexOf(net.me.id));
     player.teleport(new THREE.Vector3(Math.cos(idx * 1.3) * idx * 2.5, 0.1, Math.sin(idx * 1.3) * idx * 2.5));
@@ -553,12 +579,19 @@ async function boot() {
       if (!buildTarget) { sfx.fail(); return; }
       const cost = BUILD_COST[buildTarget.type];
       for (const k of Object.keys(cost) as (keyof typeof cost)[]) progress.items[k] += Math.floor((cost[k] ?? 0) / 2);
-      buildSystem.remove(buildTarget.id); buildTarget = null; sfx.crumble(); return;
+      if (net.state === 'game' && !net.isHost) net.sendOp({ k: 'unbuild', id: buildTarget.id }, () => {}); else buildSystem.remove(buildTarget.id);
+      buildTarget = null; sfx.crumble(); return;
     }
     if (!buildPlan || !buildPlan.ok) { sfx.fail(); toast(buildPlan?.reason || 'Aim at the ground', headPos()); return; }
     const cost = BUILD_COST[mode];
     if (!progress.canAfford(cost)) { sfx.fail(); toast(progress.describeMissing(cost), headPos()); return; }
-    const piece = buildSystem.add({ type: mode, cx: buildPlan.cx, cz: buildPlan.cz, level: buildPlan.level, edge: buildPlan.edge, axis: buildPlan.axis, color: PALETTE[buildPanel.color] });
+    const want = { type: mode, cx: buildPlan.cx, cz: buildPlan.cz, level: buildPlan.level, edge: buildPlan.edge, axis: buildPlan.axis, color: PALETTE[buildPanel.color] };
+    if (net.state === 'game' && !net.isHost) {
+      progress.spend(cost); progress.piecesBuilt++;
+      net.sendOp({ k: 'build', p: want }, r => { if (r.ok === false) { for (const k of Object.keys(cost) as (keyof typeof cost)[]) progress.items[k] += cost[k] ?? 0; progress.piecesBuilt--; sfx.fail(); toast(String(r.msg ?? 'Could not build there'), headPos()); } });
+      sfx.thump(pieceGeometry(want).center); say('build'); return;
+    }
+    const piece = buildSystem.add(want);
     if (!piece) { sfx.fail(); return; }
     progress.spend(cost); progress.piecesBuilt++;
     const g = pieceGeometry(piece); sfx.thump(g.center); say('build'); first(mode === 'foundation' ? 'foundation' : mode === 'wall' ? 'wall' : 'catwalk'); if (progress.piecesBuilt % 8 === 0) chat('buildMore', 60, true);
@@ -575,43 +608,131 @@ async function boot() {
     const pts = FactoryView.path(new THREE.Vector3(a0.x, a0.y, a0.z), new THREE.Vector3(b.x, b.y, b.z));
     const len = FactoryView.pathLength(pts), cost = Math.ceil(len / 5);
     if (progress.items.iron < cost) { sfx.fail(); toast(`A ${Math.round(len)} m belt needs ${cost} iron`, headPos()); linkFrom = null; return; }
+    if (net.state === 'game' && !net.isHost) {
+      progress.items.iron -= cost; progress.links++;
+      net.sendOp({ k: 'link', from: a0.id, to: id }, r => { if (r.ok === false) { progress.items.iron += cost; progress.links--; sfx.fail(); toast(String(r.msg ?? 'Could not link them'), headPos()); } });
+      sfx.craft(); toast(`Belt built (${Math.round(len)} m, ${cost} iron)`, headPos()); linkFrom = null; return;
+    }
     const res = factory.link(a0.id, id, len);
     if (typeof res === 'string') { sfx.fail(); toast(res, headPos()); linkFrom = null; return; }
+    markFactory();
     progress.items.iron -= cost; progress.links++;
     factoryView!.addLink(res, new THREE.Vector3(a0.x, a0.y, a0.z), new THREE.Vector3(b.x, b.y, b.z));
     sfx.craft(); toast(`Belt built (${Math.round(len)} m, ${cost} iron)`, headPos()); linkFrom = null;
   };
 
-  const machineAction = (action: MachineAction, id: number, arg?: number) => {
+  /** Dismantle a machine and everything attached to it. */
+  const dismantle = (id: number) => {
     const mc = factory.get(id); if (!mc || !planet) return;
+    if (mc.ore) planet.setOreOccupied(mc.ore.index, false);
+    for (const lid of factory.removeMachine(id)) factoryView!.removeLink(lid);
+    factoryView!.removeMachine(id); planet.removeMachineCollider(id);
+    if (linkFrom === id) linkFrom = null;
+    if (selectedMachine === id) { selectedMachine = null; machinePanel.show(null); }
+    markFactory();
+  };
+  const giveItems = (got: Partial<Record<string, number>>, at: THREE.Vector3) => {
+    const parts: string[] = [];
+    const into: Record<string, 'iron' | 'copper' | 'plate' | 'wire'> = { ironOre: 'iron', copperOre: 'copper', ironIngot: 'iron', copperIngot: 'copper', plate: 'plate', wire: 'wire' };
+    for (const [k, n] of Object.entries(got) as [keyof typeof into, number][]) { if (!n) continue; progress.items[into[k]] += n; parts.push(`${n} ${ITEM_NAME[k as keyof typeof ITEM_NAME]}`); if (k === 'plate') { progress.platesCollected += n; say('plates'); } }
+    sfx.pickup(); toast(parts.length ? `Took ${parts.join(', ')}` : 'Nothing to take', at);
+  };
+  /** In a lobby the host owns the factory: clients ask it to do things (and pay for them here). */
+  const clientMachineAction = (action: MachineAction, id: number, arg?: number) => {
+    const mc = factory.get(id); if (!mc) return;
     const at = new THREE.Vector3(mc.x, mc.y + 2.5, mc.z);
-    if (action === 'reset') { factory.resetBreaker(); sfx.craft(); toast('Breaker reset', at); return; }
-    if (action === 'filter') { factory.cycleFilter(id, arg ?? 0); sfx.pickup(); return; }
-    if (action === 'tokens') { const n = factory.takeTokens(); progress.items.token += n; sfx.pickup(); toast(n ? `+${n} tokens` : 'No tokens yet', at); if (n) { say('sink'); first('firstTokens'); } return; }
+    const ask = (op: Record<string, unknown>, ok: (r: Record<string, unknown>) => void, undo?: () => void) =>
+      net.sendOp(op, r => { if (r.ok === false) { undo?.(); sfx.fail(); toast(String(r.msg ?? 'Not possible'), at); } else ok(r); });
+    if (action === 'reset') { ask({ k: 'reset' }, () => { sfx.craft(); toast('Breaker reset', at); }); return; }
+    if (action === 'filter') { ask({ k: 'filter', id, slot: arg ?? 0 }, () => sfx.pickup()); return; }
+    if (action === 'tokens') { ask({ k: 'tokens' }, r => { const n = Number(r.tokens) || 0; progress.items.token += n; sfx.pickup(); toast(n ? `+${n} tokens` : 'No tokens yet', at); if (n) { say('sink'); first('firstTokens'); } }); return; }
     if (action === 'overclock') {
       if (!progress.has('overclockst') || progress.items.core < 1) { sfx.fail(); toast('Needs the Overclock Station and a core', at); return; }
-      if (factory.overclock(id)) { progress.items.core -= 1; sfx.craft(); toast(`Clock ${Math.round(mc.clock * 100)}%`, at); say('overclock'); chat('overclockMore', 30, true); } else sfx.fail();
+      progress.items.core -= 1;
+      ask({ k: 'overclock', id }, () => { sfx.craft(); toast('Overclocked', at); say('overclock'); }, () => { progress.items.core += 1; });
       return;
     }
     if (action === 'fuel') {
       if (progress.items.wood < 5) { sfx.fail(); toast('Need 5 wood', at); return; }
-      progress.items.wood -= 5; factory.addFuel(id, 5); progress.fueled = true; sfx.pickup(); toast('+5 wood of fuel', at);
+      progress.items.wood -= 5;
+      ask({ k: 'fuel', id }, () => { progress.fueled = true; sfx.pickup(); toast('+5 wood of fuel', at); }, () => { progress.items.wood += 5; });
     } else if (action === 'take') {
-      const got = factory.takeAll(id), parts: string[] = [];
-      const into: Record<string, 'iron' | 'copper' | 'plate' | 'wire'> = { ironOre: 'iron', copperOre: 'copper', ironIngot: 'iron', copperIngot: 'copper', plate: 'plate', wire: 'wire' };
-      for (const [k, n] of Object.entries(got) as [keyof typeof into, number][]) { if (!n) continue; progress.items[into[k]] += n; parts.push(`${n} ${ITEM_NAME[k as keyof typeof ITEM_NAME]}`); if (k === 'plate') { progress.platesCollected += n; say('plates'); } }
-      sfx.pickup(); toast(parts.length ? `Took ${parts.join(', ')}` : 'Nothing to take', at);
+      ask({ k: 'take', id }, r => giveItems((r.items ?? {}) as Record<string, number>, at));
     } else {
       const r = progress.recipe(mc.kind);
       for (const k of Object.keys(r.cost) as (keyof typeof r.cost)[]) progress.items[k] += Math.floor((r.cost[k] ?? 0) / 2);
-      if (mc.ore) planet.setOreOccupied(mc.ore.index, false);
-      for (const lid of factory.removeMachine(id)) factoryView!.removeLink(lid);
-      factoryView!.removeMachine(id); planet.removeMachineCollider(id);
-      if (linkFrom === id) linkFrom = null;
-      selectedMachine = null; machinePanel.show(null); sfx.crumble(); toast('Dismantled (half the cost back)', at);
+      ask({ k: 'remove', id }, () => { sfx.crumble(); toast('Dismantled (half the cost back)', at); });
+      selectedMachine = null; machinePanel.show(null);
+    }
+  };
+  const machineAction = (action: MachineAction, id: number, arg?: number) => {
+    if (net.state === 'game' && !net.isHost) { clientMachineAction(action, id, arg); return; }
+    const mc = factory.get(id); if (!mc || !planet) return;
+    const at = new THREE.Vector3(mc.x, mc.y + 2.5, mc.z);
+    if (action === 'reset') { factory.resetBreaker(); markFactory(); sfx.craft(); toast('Breaker reset', at); return; }
+    if (action === 'filter') { factory.cycleFilter(id, arg ?? 0); markFactory(); sfx.pickup(); return; }
+    if (action === 'tokens') { const n = factory.takeTokens(); markFactory(); progress.items.token += n; sfx.pickup(); toast(n ? `+${n} tokens` : 'No tokens yet', at); if (n) { say('sink'); first('firstTokens'); } return; }
+    if (action === 'overclock') {
+      if (!progress.has('overclockst') || progress.items.core < 1) { sfx.fail(); toast('Needs the Overclock Station and a core', at); return; }
+      if (factory.overclock(id)) { progress.items.core -= 1; markFactory(); sfx.craft(); toast(`Clock ${Math.round(mc.clock * 100)}%`, at); say('overclock'); chat('overclockMore', 30, true); } else sfx.fail();
+      return;
+    }
+    if (action === 'fuel') {
+      if (progress.items.wood < 5) { sfx.fail(); toast('Need 5 wood', at); return; }
+      progress.items.wood -= 5; factory.addFuel(id, 5); markFactory(); progress.fueled = true; sfx.pickup(); toast('+5 wood of fuel', at);
+    } else if (action === 'take') {
+      const got = factory.takeAll(id); markFactory(); giveItems(got, at);
+    } else {
+      const r = progress.recipe(mc.kind);
+      for (const k of Object.keys(r.cost) as (keyof typeof r.cost)[]) progress.items[k] += Math.floor((r.cost[k] ?? 0) / 2);
+      dismantle(id); sfx.crumble(); toast('Dismantled (half the cost back)', at);
     }
   };
 
+  /** Host: do what a client asked for in the shared base. */
+  const hostOp = (_from: string, op: Record<string, unknown>): Record<string, unknown> => {
+    if (!planet || !factoryView) return { ok: false, msg: 'The host is not ready' };
+    const n = (k: string) => Number(op[k]);
+    const m = factory.get(n('id'));
+    switch (op.k) {
+      case 'place': {
+        const kind = String(op.kind);
+        if (!isMachine(kind)) return { ok: false, msg: 'Unknown machine' };
+        if (factory.machines.length >= MAX_MACHINES) return { ok: false, msg: `Max ${MAX_MACHINES} machines` };
+        type OreRef = { index: number; type: 'copper' | 'iron'; purity: number };
+        let ore: OreRef | null = null;
+        if (kind === 'miner') {
+          const o = op.ore as OreRef | null;
+          if (!o || !planet.isOreFree(o.index)) return { ok: false, msg: 'That ore deposit is taken' };
+          ore = o; planet.setOreOccupied(o.index, true);
+        }
+        const mc = factory.addMachine(kind, n('x'), n('y'), n('z'), n('yaw'), ore);
+        factoryView.addMachine(mc); planet.addMachineCollider(mc.id, mc.x, mc.y, mc.z); markFactory();
+        return { ok: true };
+      }
+      case 'remove': if (!m) return { ok: false, msg: 'Already gone' }; dismantle(m.id); return { ok: true };
+      case 'link': {
+        const a = factory.get(n('from')), b = factory.get(n('to'));
+        if (!a || !b) return { ok: false, msg: 'A machine is gone' };
+        const pa = new THREE.Vector3(a.x, a.y, a.z), pb = new THREE.Vector3(b.x, b.y, b.z);
+        const res = factory.link(a.id, b.id, FactoryView.pathLength(FactoryView.path(pa, pb)));
+        if (typeof res === 'string') return { ok: false, msg: res };
+        factoryView.addLink(res, pa, pb); markFactory(); return { ok: true };
+      }
+      case 'overclock': if (!factory.overclock(n('id'))) return { ok: false, msg: 'Cannot overclock that further' }; markFactory(); return { ok: true };
+      case 'filter': factory.cycleFilter(n('id'), n('slot')); markFactory(); return { ok: true };
+      case 'fuel': if (!factory.addFuel(n('id'), 5)) return { ok: false, msg: 'That does not burn wood' }; markFactory(); return { ok: true };
+      case 'take': { const items = factory.takeAll(n('id')); markFactory(); return { ok: true, items }; }
+      case 'tokens': { const tokens = factory.takeTokens(); markFactory(); return { ok: true, tokens }; }
+      case 'reset': factory.resetBreaker(); markFactory(); return { ok: true };
+      case 'build': {
+        if (!buildSystem) return { ok: false, msg: 'Not ready' };
+        return buildSystem.add(op.p as Omit<Piece, 'id'>) ? { ok: true } : { ok: false, msg: 'Something is already there' };
+      }
+      case 'unbuild': return buildSystem?.remove(n('id')) ? { ok: true } : { ok: false, msg: 'Already gone' };
+    }
+    return { ok: false, msg: 'Unknown request' };
+  };
   const tryPlace = () => {
     if (!placing || !planet || !ghostPose) return;
     if (!ghostPose.ok) { sfx.fail(); toast(ghostPose.reason || 'Aim at the ground', headPos()); return; }
@@ -620,7 +741,7 @@ async function boot() {
     if (kind === 'hub') {
       const built = planet.placeHub(gp.x, gp.z, gp.yaw, gp.y);
       progress.hubPlaced = true;
-      buildHubUi(built);
+      buildHubUi(built); net.sendWorld('hub', 0, [gp.x, gp.z, gp.yaw, gp.y]);
       sfx.craft(); sfx.thump(new THREE.Vector3(gp.x, gp.y, gp.z));
       toast('Hub built!', new THREE.Vector3(gp.x, gp.y + 3.5, gp.z)); say('hub');
     } else if (isMachine(kind)) {
@@ -630,12 +751,20 @@ async function boot() {
         if (!o) { sfx.fail(); toast('Place the Miner on an iron or copper ore rock', headPos()); placing = kind; ghost = (() => { const mm = buildMachineMesh(kind); makeGhost(mm.group); scene.add(mm.group); return mm; })(); ghostPose = gp; return; }
         ore = { index: o.index, type: o.type, purity: o.purity }; planet.setOreOccupied(o.index, true); say('miner');
       }
+      if (net.state === 'game' && !net.isHost) {
+        const cost = progress.recipe(kind).cost;
+        net.sendOp({ k: 'place', kind, x: gp.x, y: gp.y, z: gp.z, yaw: gp.yaw, ore }, r => {
+          if (r.ok === false) { for (const k of Object.keys(cost) as (keyof typeof cost)[]) progress.items[k] += cost[k] ?? 0; sfx.fail(); toast(String(r.msg ?? 'Could not place it'), headPos()); }
+        });
+        sfx.craft(); sfx.thump(new THREE.Vector3(gp.x, gp.y, gp.z)); toast(`${kind} placed`, new THREE.Vector3(gp.x, gp.y + 3, gp.z));
+        return;
+      }
       const mc = factory.addMachine(kind, gp.x, gp.y, gp.z, gp.yaw, ore);
-      factoryView!.addMachine(mc); planet.addMachineCollider(mc.id, gp.x, gp.y, gp.z);
+      factoryView!.addMachine(mc); planet.addMachineCollider(mc.id, gp.x, gp.y, gp.z); markFactory();
       sfx.craft(); sfx.thump(new THREE.Vector3(gp.x, gp.y, gp.z));
       toast(`${kind} placed`, new THREE.Vector3(gp.x, gp.y + 3, gp.z));
     } else {
-      planet.placeProp(kind, gp.x, gp.z);
+      planet.placeProp(kind, gp.x, gp.z); net.sendWorld('prop', Date.now() % 2147483647, [kind === 'campfire' ? 0 : 1, gp.x, gp.z]);
       sfx.craft(); sfx.thump(new THREE.Vector3(gp.x, gp.y, gp.z));
       toast(kind === 'campfire' ? 'Campfire lit!' : 'Lamp placed!', new THREE.Vector3(gp.x, gp.y + 2, gp.z));
     }
@@ -926,6 +1055,11 @@ async function boot() {
         const pool = night && Math.random() < 0.4 ? 'alienNight' : factory.machines.length > 2 && Math.random() < 0.5 ? 'idleFactory' : progress.piecesBuilt > 4 && Math.random() < 0.3 ? 'idleBuilder' : night ? 'idleNight' : 'idleDay';
         chat(pool, 0, true);
       }
+    }
+    if (appMode === 'game' && net.state === 'game' && net.isHost) {
+      snapT += dt;
+      if (factoryDirty || snapT >= 1) { snapT = 0; factoryDirty = false; net.broadcastFactory(factory.toJSON()); }
+      if (buildSystem && buildSystem.version !== sentBuildV) { sentBuildV = buildSystem.version; net.broadcastBuild(buildSystem.toJSON()); }
     }
     if (appMode === 'game' && net.state === 'game') {
       net.tick(dt, () => {

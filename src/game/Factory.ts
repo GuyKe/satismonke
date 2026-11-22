@@ -59,8 +59,10 @@ export interface Link { id: number; from: number; to: number; length: number; sl
 export interface FactoryState {
   nextId: number;
   tokens?: number;
-  machines: { id: number; kind: MachineKind; x: number; y: number; z: number; yaw: number; ore: Machine['ore']; input: Buf; output: Buf; stored: Buf; fuel: number; clock?: number; slots?: Slot[] }[];
-  links: { id: number; from: number; to: number; length: number; slot?: number }[];
+  machines: { id: number; kind: MachineKind; x: number; y: number; z: number; yaw: number; ore: Machine['ore']; input: Buf; output: Buf; stored: Buf; fuel: number; clock?: number; slots?: Slot[]; job?: Machine['job']; prog?: number }[];
+  links: { id: number; from: number; to: number; length: number; slot?: number; items?: Link['items'] }[];
+  /** Multiplayer snapshots also carry the shared settings and the breaker. */
+  cfg?: { minerMult: number; alt: Factory['alt']; roofSolar: number; reactor: number; tripped: boolean };
 }
 
 export class Factory {
@@ -301,9 +303,36 @@ export class Factory {
   toJSON(): FactoryState {
     return {
       nextId: this.nextId, tokens: this.tokens,
-      machines: this.machines.map(m => ({ id: m.id, kind: m.kind, x: m.x, y: m.y, z: m.z, yaw: m.yaw, ore: m.ore, input: { ...m.input }, output: { ...m.output }, stored: { ...m.stored }, fuel: m.fuel, clock: m.clock, slots: m.slots.map(s => ({ ...s })) })),
-      links: this.links.map(l => ({ id: l.id, from: l.from, to: l.to, length: l.length, slot: l.slot })),
+      machines: this.machines.map(m => ({ id: m.id, kind: m.kind, x: m.x, y: m.y, z: m.z, yaw: m.yaw, ore: m.ore, input: { ...m.input }, output: { ...m.output }, stored: { ...m.stored }, fuel: m.fuel, clock: m.clock, slots: m.slots.map(s => ({ ...s })), job: m.job ? { ...m.job } : null, prog: m.prog })),
+      links: this.links.map(l => ({ id: l.id, from: l.from, to: l.to, length: l.length, slot: l.slot, items: l.items.map(i => ({ ...i })) })),
+      cfg: { minerMult: this.minerMult, alt: { ...this.alt }, roofSolar: this.roofSolar, reactor: this.reactor, tripped: this.tripped },
     };
+  }
+
+  /**
+   * Multiplayer: bring this factory in line with the host's snapshot without recreating what already exists.
+   * Returns what appeared and disappeared so the caller can add or remove meshes and colliders.
+   */
+  applyState(s: FactoryState): { addedM: Machine[]; removedM: Machine[]; addedL: Link[]; removedL: Link[] } {
+    const keepM = new Set(s.machines.map(m => m.id)), keepL = new Set(s.links.map(l => l.id));
+    const removedM = this.machines.filter(m => !keepM.has(m.id)), removedL = this.links.filter(l => !keepL.has(l.id));
+    this.machines = this.machines.filter(m => keepM.has(m.id)); this.links = this.links.filter(l => keepL.has(l.id));
+    const addedM: Machine[] = [], addedL: Link[] = [];
+    for (const d of s.machines) {
+      let m = this.get(d.id);
+      if (!m) { m = this.addMachine(d.kind, d.x, d.y, d.z, d.yaw, d.ore ? { ...d.ore, purity: d.ore.purity ?? 1 } : null); m.id = d.id; addedM.push(m); }
+      m.input = { ...d.input }; m.output = { ...d.output }; m.stored = { ...d.stored }; m.fuel = d.fuel; m.clock = d.clock ?? 1;
+      if (d.slots) m.slots = d.slots.map(x => ({ ...x }));
+      m.job = d.job ? { ...d.job } : null; m.prog = d.prog ?? 0;
+    }
+    for (const d of s.links) {
+      let l = this.links.find(x => x.id === d.id);
+      if (!l) { l = { id: d.id, from: d.from, to: d.to, length: d.length, slot: d.slot ?? -1, items: [] }; this.links.push(l); addedL.push(l); }
+      l.items = (d.items ?? []).map(i => ({ ...i }));
+    }
+    this.nextId = Math.max(this.nextId, s.nextId); this.tokens = s.tokens ?? 0;
+    if (s.cfg) { this.minerMult = s.cfg.minerMult; this.alt = { ...s.cfg.alt }; this.roofSolar = s.cfg.roofSolar; this.reactor = s.cfg.reactor; this.tripped = s.cfg.tripped; }
+    return { addedM, removedM, addedL, removedL };
   }
 
   load(s: FactoryState): void {
@@ -311,9 +340,10 @@ export class Factory {
     for (const d of s.machines) {
       const m = this.addMachine(d.kind, d.x, d.y, d.z, d.yaw, d.ore ? { ...d.ore, purity: d.ore.purity ?? 1 } : null);
       m.id = d.id; m.input = { ...d.input }; m.output = { ...d.output }; m.stored = { ...d.stored }; m.fuel = d.fuel; m.clock = d.clock ?? 1;
+      if (d.job) m.job = { ...d.job }; m.prog = d.prog ?? 0;
       if (d.slots) m.slots = d.slots.map(x => ({ ...x }));
     }
     this.nextId = s.nextId;
-    for (const l of s.links) this.links.push({ id: l.id, from: l.from, to: l.to, length: l.length, slot: l.slot ?? -1, items: [] });
+    for (const l of s.links) this.links.push({ id: l.id, from: l.from, to: l.to, length: l.length, slot: l.slot ?? -1, items: (l.items ?? []).map(i => ({ ...i })) });
   }
 }

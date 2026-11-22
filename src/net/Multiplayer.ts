@@ -9,15 +9,22 @@ const SEND_HZ = 12;
 export interface PlayerInfo { id: string; name: string; color: number }
 /** head x,y,z + quaternion x,y,z,w, then left hand x,y,z, right hand x,y,z */
 export type Pose = number[];
+/** A request to the host (place a machine, build a wall...) or its answer. */
+export type Op = Record<string, unknown>;
+export type WorldEvent = [string, number, number[]?];
 
 type Msg =
   | { t: 'hello'; name: string; color: number }
-  | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[]; world: [string, number][] }
+  | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[]; world: WorldEvent[] }
   | { t: 'join'; p: PlayerInfo }
   | { t: 'leave'; id: string }
   | { t: 'start'; clock: number }
   | { t: 'clock'; clock: number }
-  | { t: 'w'; k: string; i: number }
+  | { t: 'w'; k: string; i: number; d?: number[] }
+  | { t: 'op'; rid: number; op: Op }
+  | { t: 'res'; rid: number; r: Op }
+  | { t: 'fs'; d: unknown }
+  | { t: 'bs'; d: unknown }
   | { t: 's'; id: string; p: Pose };
 
 export type NetState = 'off' | 'connecting' | 'lobby' | 'game' | 'error';
@@ -58,9 +65,20 @@ export class Net {
   onPose: (id: string, p: Pose) => void = () => {};
   onLeave: (id: string) => void = () => {};
   /** A friend used up a resource (kind, index). */
-  onWorld: (kind: string, i: number) => void = () => {};
+  onWorld: (kind: string, i: number, d?: number[]) => void = () => {};
+  /** Host only: handle a client's request and return the answer. */
+  onOp: (from: string, op: Op) => Op = () => ({ ok: false });
+  /** Clients: the host's latest factory / building snapshots. */
+  onFactory: (d: unknown) => void = () => {};
+  onBuild: (d: unknown) => void = () => {};
+  lastFactory: unknown = null;
+  lastBuild: unknown = null;
+  /** Host: current snapshots for someone who just joined. */
+  snapshots: () => { f: unknown; b: unknown } = () => ({ f: null, b: null });
+  private rid = 1;
+  private pendingOps = new Map<number, (r: Op) => void>();
   /** Every resource used up so far in this lobby (for late joiners and the start of the game). */
-  worldLog: [string, number][] = [];
+  worldLog: WorldEvent[] = [];
   private worldSeen = new Set<string>();
   /** Provided by the game: the clock the host shares with everyone. */
   getClock: () => number = () => 0;
@@ -121,7 +139,7 @@ export class Net {
 
   leave(quiet = false): void {
     this.peer?.destroy(); this.peer = null; this.conns.clear(); this.players.clear();
-    this.state = 'off'; this.isHost = false; this.code = ''; this.worldLog = []; this.worldSeen.clear();
+    this.state = 'off'; this.isHost = false; this.code = ''; this.worldLog = []; this.worldSeen.clear(); this.pendingOps.clear(); this.lastFactory = this.lastBuild = null;
     if (!quiet) this.onChange();
   }
 
@@ -142,9 +160,13 @@ export class Net {
         this.players.set(p.id, p); this.conns.set(p.id, c);
         c.send({ t: 'welcome', id: p.id, clock: this.getClock(), started: this.state === 'game', players: this.list, world: this.worldLog } as Msg);
         this.broadcast({ t: 'join', p } as Msg, p.id);
+        if (this.state === 'game') { const s = this.snapshots(); c.send({ t: 'fs', d: s.f } as Msg); c.send({ t: 'bs', d: s.b } as Msg); }
         this.onChange();
+      } else if (m.t === 'op') {
+        let r: Op; try { r = this.onOp(c.peer, m.op); } catch (e) { r = { ok: false, msg: String(e) }; }
+        c.send({ t: 'res', rid: m.rid, r } as Msg);
       } else if (m.t === 'w') {
-        if (this.logWorld(m.k, m.i)) { this.onWorld(m.k, m.i); this.broadcast(m, c.peer); }
+        if (this.logWorld(m.k, m.i, m.d)) { this.onWorld(m.k, m.i, m.d); this.broadcast(m, c.peer); }
       } else if (m.t === 's') {
         this.onPose(c.peer, m.p);
         this.broadcast({ t: 's', id: c.peer, p: m.p }, c.peer);
@@ -162,7 +184,7 @@ export class Net {
     switch (m.t) {
       case 'welcome':
         this.players.clear(); for (const p of m.players) this.players.set(p.id, p); this.players.set(this.me.id, this.me);
-        for (const [k, i] of m.world ?? []) this.logWorld(k, i);
+        for (const [k, i, d] of m.world ?? []) this.logWorld(k, i, d);
         this.state = m.started ? 'game' : 'lobby'; this.onChange();
         if (m.started) this.onStart(m.clock);
         break;
@@ -170,20 +192,33 @@ export class Net {
       case 'leave': this.players.delete(m.id); this.onLeave(m.id); this.onChange(); break;
       case 'start': this.state = 'game'; this.onStart(m.clock); this.onChange(); break;
       case 'clock': this.onClock(m.clock); break;
-      case 'w': if (this.logWorld(m.k, m.i)) this.onWorld(m.k, m.i); break;
+      case 'w': if (this.logWorld(m.k, m.i, m.d)) this.onWorld(m.k, m.i, m.d); break;
+      case 'res': { const cb = this.pendingOps.get(m.rid); this.pendingOps.delete(m.rid); cb?.(m.r); break; }
+      case 'fs': this.lastFactory = m.d; if (m.d) this.onFactory(m.d); break;
+      case 'bs': this.lastBuild = m.d; if (m.d) this.onBuild(m.d); break;
       case 's': this.onPose(m.id, m.p); break;
     }
   }
 
-  private logWorld(k: string, i: number): boolean {
-    const key = k + ':' + i; if (this.worldSeen.has(key)) return false;
-    this.worldSeen.add(key); this.worldLog.push([k, i]); return true;
+  private logWorld(k: string, i: number, d?: number[]): boolean {
+    const key = k + ':' + i + (d ? ':' + d.join(',') : ''); if (this.worldSeen.has(key)) return false;
+    this.worldSeen.add(key); this.worldLog.push(d ? [k, i, d] : [k, i]); return true;
   }
 
-  /** You used up a resource: remember it and tell everyone. */
-  sendWorld(k: string, i: number): void {
-    if (this.state !== 'game' || !this.logWorld(k, i)) return;
-    const m: Msg = { t: 'w', k, i };
+  /** Clients: ask the host to do something and get its answer. (The host just does things itself.) */
+  sendOp(op: Op, done: (r: Op) => void): void {
+    const c = this.conns.get('host');
+    if (this.isHost || !c?.open) { done({ ok: false, msg: 'Not connected to the host' }); return; }
+    const rid = this.rid++; this.pendingOps.set(rid, done); c.send({ t: 'op', rid, op } as Msg);
+  }
+
+  broadcastFactory(d: unknown): void { if (this.isHost && this.state === 'game') this.broadcast({ t: 'fs', d }); }
+  broadcastBuild(d: unknown): void { if (this.isHost && this.state === 'game') this.broadcast({ t: 'bs', d }); }
+
+  /** You did something to the world (used up a resource, built the Hub...): remember it and tell everyone. */
+  sendWorld(k: string, i: number, d?: number[]): void {
+    if (this.state !== 'game' || !this.logWorld(k, i, d)) return;
+    const m: Msg = { t: 'w', k, i, d };
     if (this.isHost) this.broadcast(m); else if (this.conns.get('host')?.open) this.conns.get('host')!.send(m);
   }
 
