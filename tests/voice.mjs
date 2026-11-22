@@ -1,0 +1,21 @@
+// Two browsers with fake microphones: voice connects and audio arrives. Needs vite preview on :4173 and a local PeerServer on 127.0.0.1:9000.
+import { createRequire } from 'module';
+const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_DIR + 'playwright');
+const b = await chromium.launch({ args: ['--use-gl=swiftshader', '--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
+const URL = 'http://localhost:4173/?peerhost=127.0.0.1&peerport=9000';
+const mk = async () => { const c = await b.newContext({ permissions: ['microphone'] }); const p = await c.newPage(); p.errs = []; p.on('pageerror', e => p.errs.push(String(e))); await p.goto(URL); await p.waitForFunction(() => window.__game, null, { timeout: 60000 }); return p; };
+const A = await mk(), B = await mk();
+await A.evaluate(() => window.__game.net.host()); await A.waitForFunction(() => window.__game.net.state === 'lobby');
+const code = await A.evaluate(() => window.__game.net.code);
+await B.evaluate(c => window.__game.net.join(c), code); await B.waitForFunction(() => window.__game.net.state === 'lobby', null, { timeout: 20000 });
+await A.evaluate(() => window.__game.net.start()); await B.waitForFunction(() => window.__game.net.state === 'game', null, { timeout: 20000 });
+await A.waitForFunction(() => window.__game.voice.connected === 1, null, { timeout: 30000 });
+await B.waitForFunction(() => window.__game.voice.connected === 1, null, { timeout: 30000 });
+const peak = async p => { let m = 0; for (let i = 0; i < 30; i++) { m = Math.max(m, await p.evaluate(() => { const g = window.__game, o = g.net.list.find(x => x.id !== g.net.me.id).id; return g.voice.levelOf(o); })); await p.waitForTimeout(200); } return +m.toFixed(3); };
+console.log('peak level B hears from A:', await peak(B), ' A hears from B:', await peak(A));
+const info = p => p.evaluate(() => { const g = window.__game, other = g.net.list.find(x => x.id !== g.net.me.id).id; return { state: g.voice.state, connected: g.voice.connected, heardLevel: +g.voice.levelOf(other).toFixed(3), speaking: g.voice.speaking(other) }; });
+console.log('A', await info(A), 'B', await info(B));
+await A.evaluate(() => window.__game.voice.toggleMute()); console.log('A after mute:', await A.evaluate(() => window.__game.voice.state));
+await B.waitForTimeout(2000); console.log('peak while A muted:', await peak(B));
+console.log(A.errs, B.errs);
+await b.close();

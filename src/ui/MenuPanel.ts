@@ -8,7 +8,7 @@ import { CONTROLS_LINES, HOWTO_LINES, RESOURCE_GUIDE } from './helpText';
 const W = 800, H = 500;
 type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby';
 
-export interface LobbyInfo { code: string; isHost: boolean; status: 'connecting' | 'lobby' | 'game' | 'error'; error: string; players: { name: string; color: number }[] }
+export interface LobbyInfo { mic: string; code: string; isHost: boolean; status: 'connecting' | 'lobby' | 'game' | 'error'; error: string; players: { name: string; color: number }[] }
 const GUIDE_PER_PAGE = 4;
 
 interface Btn { label: string; x: number; y: number; w: number; h: number; act: () => void; danger?: boolean; dim?: boolean }
@@ -27,6 +27,7 @@ export interface MenuHandlers {
   onJoin(code: string): void;
   onLeaveLobby(): void;
   onStartLobby(): void;
+  onToggleMic(): void;
 }
 
 /** The main menu (PLAY / CONTROLS / HOW TO PLAY, with save slots) and the in-game pause menu. */
@@ -77,6 +78,7 @@ export class MenuPanel extends Screen {
         break;
       case 'pause':
         this.btns = col([['RESUME', () => this.h.onResume()], ['SAVE GAME', () => this.h.onSave()], ['SETTINGS', () => this.go('settings')], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['FIND RESOURCES', () => this.go('guide')], ['SAVE & MAIN MENU', () => this.h.onMainMenu()]], 84, 50, 8);
+        if (this.lobby && this.lobby.code) this.btns.push({ label: this.micLabel(this.lobby.mic), x: 640, y: 48, w: 140, h: 36, dim: this.lobby.mic === 'nomic', act: () => this.h.onToggleMic() });
         break;
       case 'slots':
         this.slots = listSlots();
@@ -113,6 +115,7 @@ export class MenuPanel extends Screen {
         const l = this.lobby;
         this.btns = [];
         if (l && l.status === 'lobby' && l.isHost) this.btns.push({ label: 'START GAME', x: 190, y: 330, w: 420, h: 66, act: () => this.h.onStartLobby() });
+        if (l && l.status !== 'error' && l.status !== 'connecting') this.btns.push({ label: this.micLabel(l.mic), x: 30, y: 410, w: 200, h: 60, dim: l.mic === 'nomic', act: () => this.h.onToggleMic() });
         this.btns.push({ label: l && l.status === 'error' ? 'BACK' : 'LEAVE LOBBY', x: 250, y: 410, w: 300, h: 60, danger: true, act: () => { this.h.onLeaveLobby(); this.go('multi'); } });
         break;
       }
@@ -144,6 +147,8 @@ export class MenuPanel extends Screen {
       }
     }
   }
+
+  private micLabel(m: string): string { return m === 'on' ? 'MIC ON' : m === 'muted' ? 'MIC OFF' : m === 'nomic' ? 'NO MIC' : 'MIC...'; }
 
   private idx(uv: THREE.Vector2 | null): number {
     if (!uv) return -1;

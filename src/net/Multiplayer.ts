@@ -96,6 +96,9 @@ export class Net {
 
   private fail(msg: string): void { this.error = msg; this.state = 'error'; this.onChange(); }
 
+  /** The WebRTC peer (voice chat makes its calls through it). */
+  get peerObj(): Peer | null { return this.peer; }
+
   get list(): PlayerInfo[] { return [this.me, ...[...this.players.values()].filter(p => p.id !== this.me.id)]; }
 
   /** Create a lobby and wait for friends. */
