@@ -128,6 +128,9 @@ async function boot() {
   const MACHINE_KINDS: MachineKind[] = ['miner', 'smelter', 'constructor', 'storage', 'burner', 'solar'];
   const isMachine = (k: string | null): k is MachineKind => !!k && (MACHINE_KINDS as string[]).includes(k);
   const factory = new Factory();
+  // Created here (not next to machineAction) because resetGame() uses it during boot; the action is late-bound.
+  const machinePanel = new MachinePanel(factory, (a, id) => machineAction(a, id));
+  machinePanel.mesh.visible = false; scene.add(machinePanel.mesh);
   let factoryView: FactoryView | null = null;
   let linkMode = false, linkFrom: number | null = null;
   let hoveredMachine: number | null = null, selectedMachine: number | null = null, selectHold = 0;
@@ -498,8 +501,6 @@ async function boot() {
       selectedMachine = null; machinePanel.show(null); sfx.crumble(); toast('Dismantled (half the cost back)', at);
     }
   };
-  const machinePanel = new MachinePanel(factory, machineAction);
-  machinePanel.mesh.visible = false; scene.add(machinePanel.mesh);
 
   const tryPlace = () => {
     if (!placing || !planet || !ghostPose) return;
