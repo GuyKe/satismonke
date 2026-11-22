@@ -1,6 +1,8 @@
-export type Res = 'wood' | 'stone' | 'steel' | 'crystal';
+export type Ore = 'copper' | 'iron' | 'gold' | 'plasma';
+export const ORES: Ore[] = ['copper', 'iron', 'gold', 'plasma'];
+export type Res = 'wood' | 'stone' | 'steel' | 'crystal' | Ore;
 export type Cost = Partial<Record<Res, number>>;
-export type RecipeId = 'hub' | 'campfire' | 'pickaxe' | 'axe' | 'lantern' | 'gloves' | 'sticky' | 'floatcore' | 'crystalgloves' | 'lamp';
+export type RecipeId = 'hub' | 'campfire' | 'pickaxe' | 'axe' | 'lantern' | 'gloves' | 'sticky' | 'floatcore' | 'crystalgloves' | 'lamp' | 'ironpick' | 'copperlantern' | 'scanner' | 'plasmacore';
 
 export interface Recipe {
   id: RecipeId;
@@ -48,13 +50,30 @@ export const RECIPES: Recipe[] = [
     lockedHint: p => p.has('gloves') ? `Collect 8 crystals (${Math.min(p.totalCrystal, 8)}/8)` : 'Craft Power Gloves first' },
   { id: 'lamp', name: 'Crystal Lamp', desc: 'A tall glowing lamp post you can place', where: 'bench', repeatable: true,
     cost: { crystal: 2, wood: 2, steel: 1 }, unlocked: p => p.totalCrystal >= 3, lockedHint: p => `Collect 3 crystals (${Math.min(p.totalCrystal, 3)}/3)` },
+  // ---- ore gear ----
+  { id: 'ironpick', name: 'Iron Pickaxe', desc: 'Every ore breaks in 1 hit, +2 stone', where: 'bench',
+    cost: { iron: 6, wood: 3 }, unlocked: p => p.mined.iron >= 4, lockedHint: p => `Mine 4 iron (${Math.min(p.mined.iron, 4)}/4)` },
+  { id: 'copperlantern', name: 'Copper Lantern', desc: 'A brighter, longer-reaching lantern', where: 'bench',
+    cost: { copper: 4, crystal: 1 }, unlocked: p => p.has('lantern') && p.mined.copper >= 4,
+    lockedHint: p => p.has('lantern') ? `Mine 4 copper (${Math.min(p.mined.copper, 4)}/4)` : 'Craft the Lantern first' },
+  { id: 'scanner', name: 'Ore Scanner', desc: 'Shows ore deposits on your map', where: 'bench',
+    cost: { copper: 4, iron: 4, gold: 2 }, unlocked: p => p.mined.gold >= 2, lockedHint: p => `Mine 2 gold (${Math.min(p.mined.gold, 2)}/2)` },
+  { id: 'plasmacore', name: 'Plasma Core', desc: 'Gravity drops to 0.2g', where: 'bench',
+    cost: { plasma: 3, gold: 2 }, unlocked: p => p.has('floatcore') && p.mined.plasma >= 3,
+    lockedHint: p => p.has('floatcore') ? `Mine 3 plasma (${Math.min(p.mined.plasma, 3)}/3)` : 'Craft the Float Core first' },
 ];
 
-const label: Record<Res, string> = { wood: 'wood', stone: 'stone', steel: 'steel', crystal: 'crystal' };
+const label: Record<Res, string> = { wood: 'wood', stone: 'stone', steel: 'steel', crystal: 'crystal', copper: 'copper', iron: 'iron', gold: 'gold', plasma: 'plasma' };
+
+export interface ProgressData {
+  items: Record<Res, number>; mined: Record<Ore, number>; totalWood: number; totalCrystal: number; treesFelled: number; bouldersBroken: number;
+  made: Partial<Record<RecipeId, number>>; podHits: number; podDestroyed: boolean; hubPlaced: boolean; benchOpened: boolean; gamePlayed: boolean; crafted: string[];
+}
 
 /** Inventory, unlock counters and the objective text. In-memory only (not saved yet). */
 export class Progress {
-  items: Record<Res, number> = { wood: 0, stone: 0, steel: 0, crystal: 0 };
+  items: Record<Res, number> = { wood: 0, stone: 0, steel: 0, crystal: 0, copper: 0, iron: 0, gold: 0, plasma: 0 };
+  mined: Record<Ore, number> = { copper: 0, iron: 0, gold: 0, plasma: 0 };
   totalWood = 0;
   totalCrystal = 0;
   treesFelled = 0;
@@ -66,6 +85,28 @@ export class Progress {
   benchOpened = false;
   gamePlayed = false;
   crafted = new Set<string>();
+
+  get oresMined(): number { return ORES.reduce((n, o) => n + this.mined[o], 0); }
+
+  /** Back to a fresh game (keeps the same object so panels holding it stay valid). */
+  reset(): void {
+    const f = new Progress();
+    Object.assign(this, { items: f.items, mined: f.mined, totalWood: 0, totalCrystal: 0, treesFelled: 0, bouldersBroken: 0, made: {}, podHits: 0, podDestroyed: false, hubPlaced: false, benchOpened: false, gamePlayed: false, crafted: new Set<string>() });
+  }
+
+  toJSON(): ProgressData {
+    return { items: { ...this.items }, mined: { ...this.mined }, totalWood: this.totalWood, totalCrystal: this.totalCrystal, treesFelled: this.treesFelled,
+      bouldersBroken: this.bouldersBroken, made: { ...this.made }, podHits: this.podHits, podDestroyed: this.podDestroyed, hubPlaced: this.hubPlaced,
+      benchOpened: this.benchOpened, gamePlayed: this.gamePlayed, crafted: [...this.crafted] };
+  }
+
+  load(d: ProgressData): void {
+    this.reset();
+    Object.assign(this.items, d.items); Object.assign(this.mined, d.mined); Object.assign(this.made, d.made);
+    this.totalWood = d.totalWood; this.totalCrystal = d.totalCrystal; this.treesFelled = d.treesFelled; this.bouldersBroken = d.bouldersBroken;
+    this.podHits = d.podHits; this.podDestroyed = d.podDestroyed; this.hubPlaced = d.hubPlaced; this.benchOpened = d.benchOpened; this.gamePlayed = d.gamePlayed;
+    this.crafted = new Set(d.crafted);
+  }
 
   add(r: Res, n: number): void { this.items[r] += n; if (r === 'wood') this.totalWood += n; if (r === 'crystal') this.totalCrystal += n; }
   canAfford(c: Cost): boolean { return (Object.keys(c) as Res[]).every(r => this.items[r] >= (c[r] ?? 0)); }
@@ -111,6 +152,13 @@ export class Progress {
       : ['Unlock the Float Core', 'Grip + punch crystals: ' + core.lockedHint(this).replace('Collect 4 crystals ', '')];
     const fire = this.recipe('campfire');
     if (this.count('campfire') === 0) return ['Build a Campfire', this.describeMissing(fire.cost) || 'Press X'];
+    if (this.oresMined === 0) return ['Find some ore', 'Grip + punch an ore rock'];
+    const iron = this.recipe('ironpick');
+    if (!this.has('ironpick')) return iron.unlocked(this) ? ['Craft the Iron Pickaxe', this.describeMissing(iron.cost) || 'Use the bench'] : ['Unlock the Iron Pickaxe', iron.lockedHint(this)];
+    const scan = this.recipe('scanner');
+    if (!this.has('scanner')) return scan.unlocked(this) ? ['Craft the Ore Scanner', this.describeMissing(scan.cost) || 'Use the bench'] : ['Unlock the Ore Scanner', scan.lockedHint(this)];
+    const plasma = this.recipe('plasmacore');
+    if (!this.has('plasmacore')) return plasma.unlocked(this) ? ['Craft the Plasma Core', this.describeMissing(plasma.cost) || 'Use the bench'] : ['Find plasma ore', plasma.lockedHint(this) + ' on the lake mesas'];
     return ['All objectives done', 'Explore!'];
   }
 }

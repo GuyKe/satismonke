@@ -18,9 +18,10 @@ npm run test:physics
 - Press Play on the console. Reach scales to your arm span automatically once you have spread your arms wide.
 - Push, swipe and swing your hands against surfaces to move. Release to launch.
 - Menu (console at the front of the capsule): point a controller at it, pull the trigger on Play.
+- Start at the main menu (PLAY, CONTROLS, HOW TO PLAY) with three save slots. Y (or Esc) opens the pause menu in game.
 - On the planet: A opens the map. Hold grip and punch a tree to fell it for wood. In the capsule after Play, B skips to the title.
 - X opens crafting. Follow the objective on your right wrist: smash your pod, gather wood and stone, craft the Hub and place it, then use its bench and computer. Trees take two punches; crystals give crystal for the advanced bench gear. B while placing cancels.
-- Desktop test keys: M = A, X = X, B = B, G (hold) = grip.
+- Desktop test keys: M = A, X = X, B = B, Esc = Y, G (hold) = grip.
 - Debug: add `?skip=planet` to jump to the planet.
 
 ## Layout

@@ -52,6 +52,13 @@ export class CollisionWorld {
   /** Id of the object owning the surface nearest to p (-1 if none). */
   ownerAt(p: THREE.Vector3): number { this.evaluate(p); return this.ownerOut; }
 
+  /** Remove the colliders of many owners at once (one spatial-hash rebuild). */
+  removeOwners(owners: Set<number>): void {
+    for (const arr of [this.spheres, this.cylinders] as { owner: number }[][])
+      for (let i = arr.length - 1; i >= 0; i--) if (owners.has(arr[i].owner)) arr.splice(i, 1);
+    if (this.grid) this.finalize();
+  }
+
   /** Remove every collider belonging to `owner` (a felled tree stops being solid). */
   removeOwner(owner: number): void {
     for (const arr of [this.spheres, this.cylinders] as { owner: number }[][])

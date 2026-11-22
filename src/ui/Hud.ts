@@ -1,24 +1,29 @@
 import { Screen } from './Screen';
 import type { Progress } from '../game/Progress';
 
-/** Left wrist: how much wood, stone and steel you carry. */
+/** Left wrist: how much of each resource you carry (two columns). */
 export class ResourceHud extends Screen {
   private key = '';
-  constructor() { super(0.14, 0.13, 256, 238); }
+  constructor() { super(0.2, 0.1, 512, 256); }
 
   set(p: Progress): void {
-    const k = `${p.items.wood}/${p.items.stone}/${p.items.steel}/${p.items.crystal}`;
+    const it = p.items, k = `${it.wood}/${it.stone}/${it.steel}/${it.crystal}/${it.copper}/${it.iron}/${it.gold}/${it.plasma}`;
     if (k === this.key) return;
     this.key = k;
     const { ctx } = this;
-    ctx.fillStyle = '#12100c'; ctx.fillRect(0, 0, 256, 238);
-    ctx.strokeStyle = '#c98a4a'; ctx.lineWidth = 6; ctx.strokeRect(3, 3, 250, 232);
-    ctx.font = 'bold 32px monospace'; ctx.textAlign = 'left';
-    const rows: [string, number, string][] = [['WOOD', p.items.wood, '#e8b27a'], ['STONE', p.items.stone, '#c0c4d0'], ['STEEL', p.items.steel, '#8fc3ff'], ['CRYSTAL', p.items.crystal, '#6fe8ff']];
-    rows.forEach(([n, v, c], i) => {
-      ctx.fillStyle = c; ctx.fillText(n, 16, 52 + i * 52);
-      ctx.fillStyle = '#fff'; ctx.textAlign = 'right'; ctx.fillText(String(v), 240, 52 + i * 52); ctx.textAlign = 'left';
+    ctx.fillStyle = '#12100c'; ctx.fillRect(0, 0, 512, 256);
+    ctx.strokeStyle = '#c98a4a'; ctx.lineWidth = 6; ctx.strokeRect(3, 3, 506, 250);
+    const cells: [string, number, string][] = [
+      ['WOOD', it.wood, '#e8b27a'], ['COPPER', it.copper, '#e08a3c'], ['STONE', it.stone, '#c0c4d0'], ['IRON', it.iron, '#8fa6c8'],
+      ['STEEL', it.steel, '#8fc3ff'], ['GOLD', it.gold, '#ffd23a'], ['CRYSTAL', it.crystal, '#6fe8ff'], ['PLASMA', it.plasma, '#d27aff'],
+    ];
+    ctx.font = 'bold 26px monospace';
+    cells.forEach(([n, v, c], i) => {
+      const col = i % 2, row = Math.floor(i / 2), x = 18 + col * 250, y = 52 + row * 58;
+      ctx.textAlign = 'left'; ctx.fillStyle = c; ctx.fillText(n, x, y);
+      ctx.textAlign = 'right'; ctx.fillStyle = '#fff'; ctx.fillText(String(v), x + 220, y);
     });
+    ctx.textAlign = 'left';
     this.refresh();
   }
 }

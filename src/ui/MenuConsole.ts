@@ -39,6 +39,9 @@ export class MenuConsole extends Screen {
     return true;
   }
 
+  /** Back to the single Play button. */
+  reset(): void { this.message = null; this.hovered.clear(); this.dirty = true; }
+
   showMessage(lines: string[]): void { this.message = lines; this.hovered.clear(); this.dirty = true; }
 
   /** Call every frame with elapsed seconds; the message flashes. */

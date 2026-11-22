@@ -149,10 +149,25 @@ function swipe(slip: number): number {
 // 10. More recipes
 {
   const pr = new Progress();
-  check('ten recipes, three in the X menu', RECIPES.length === 10 && RECIPES.filter(r => r.where === 'x').length === 3);
+  check('fourteen recipes, three in the X menu', RECIPES.length === 14 && RECIPES.filter(r => r.where === 'x').length === 3);
   check('campfire and lamp are repeatable', RECIPES.filter(r => r.repeatable).map(r => r.id).join() === 'campfire,lamp');
   check('float core locked until 4 crystals', !pr.recipe('floatcore').unlocked(pr) && (pr.add('crystal', 4), pr.recipe('floatcore').unlocked(pr)));
   check('crystal gloves need power gloves first', !pr.recipe('crystalgloves').unlocked(pr) && (pr.crafted.add('gloves'), pr.add('crystal', 4), pr.recipe('crystalgloves').unlocked(pr)));
+}
+
+// 11. Save data round trip
+{
+  const a = new Progress();
+  a.add('wood', 7); a.add('copper', 3); a.mined.copper = 2; a.crafted.add('axe'); a.made.campfire = 2; a.podDestroyed = true; a.hubPlaced = true;
+  const json = JSON.parse(JSON.stringify(a.toJSON()));
+  const b = new Progress(); b.add('gold', 99); b.load(json);
+  check('progress survives a JSON save/load', b.items.wood === 7 && b.items.copper === 3 && b.items.gold === 0 && b.mined.copper === 2 && b.has('axe') && b.count('campfire') === 2 && b.podDestroyed && b.hubPlaced);
+  b.reset();
+  check('reset gives a fresh game', b.items.wood === 0 && !b.has('axe') && !b.podDestroyed && b.oresMined === 0);
+  const c = new Progress(); c.podDestroyed = true; c.crafted.add('hub'); c.hubPlaced = true; c.benchOpened = true;
+  ['axe'].forEach(i => c.crafted.add(i)); c.gamePlayed = true; ['lantern', 'gloves', 'floatcore'].forEach(i => c.crafted.add(i)); c.made.campfire = 1;
+  check('objectives continue into the ore chain', c.objective()[0] === 'Find some ore');
+  c.mined.iron = 4; check('iron pickaxe unlocks after 4 iron', c.objective()[0] === 'Craft the Iron Pickaxe');
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');

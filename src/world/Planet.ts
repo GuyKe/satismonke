@@ -4,6 +4,8 @@ import { Animal, makeGround, makeFlyer } from './Animals';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { buildHubMesh, addHubColliders, HUB_RADIUS, HubMesh, HubPose } from './Hub';
 import { buildCampfire, buildLamp, PropKind, PropMesh } from './Props';
+import type { PlanetState } from '../game/Save';
+import type { Ore } from '../game/Progress';
 import { heightAt, buildTerrainMesh, pathMask, PONDS, LAKE, pondY, WATER_Y } from './Terrain';
 
 export interface TreeRec {
@@ -17,6 +19,16 @@ export interface TreeRec {
 export const POD_OWNER = 100000;
 export const BOULDER_OWNER = 200000;
 export const CRYSTAL_OWNER = 300000;
+export const ORE_OWNER = 400000;
+
+/** Ore deposits: colour, punches to break by hand, and how much they give. */
+export const ORE_DEF: Record<Ore, { color: number; rock: number; hits: number; yield: [number, number]; glow: number }> = {
+  copper: { color: 0xe08a3c, rock: 0x5a4a44, hits: 2, yield: [2, 3], glow: 0.1 },
+  iron: { color: 0x8fa6c8, rock: 0x464c58, hits: 3, yield: [2, 3], glow: 0 },
+  gold: { color: 0xffd23a, rock: 0x5c554a, hits: 3, yield: [1, 2], glow: 0.3 },
+  plasma: { color: 0xc04dff, rock: 0x362b48, hits: 4, yield: [1, 1], glow: 1.4 },
+};
+interface OreRec { type: Ore; x: number; y: number; z: number; r: number; hits: number; broken: boolean; slot: number }
 
 interface CrystalRec { x: number; y: number; z: number; h: number; r: number; color: number; hits: number; broken: boolean }
 
@@ -70,6 +82,7 @@ function saturnTextures(): { body: THREE.CanvasTexture; ring: THREE.CanvasTextur
   return { body, ring };
 }
 
+function rngFromSeed(seed: number) { return rngFrom(seed); }
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 const hash3 = (x: number, y: number, z: number) => { const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453; return s - Math.floor(s); };
 
@@ -101,6 +114,14 @@ export class Planet {
   onWood: ((amount: number, pos: THREE.Vector3) => void) | null = null;
   /** A felled tree hit the ground. */
   onTreeLanded: ((pos: THREE.Vector3) => void) | null = null;
+  private oreRecs: OreRec[] = [];
+  private oreMeshes = {} as Record<Ore, { rock: THREE.InstancedMesh; specks: THREE.InstancedMesh }>;
+  private mesaTops: number[] = [];
+  /** Where the pod was placed (kept so a save can put it back). */
+  private podHead = new THREE.Vector3();
+  private podForward = new THREE.Vector3(0, 0, -1);
+  /** An ore deposit broke. */
+  onOre: ((type: Ore, amount: number, pos: THREE.Vector3) => void) | null = null;
   private crystalRecs: CrystalRec[] = [];
   private crystalMesh!: THREE.InstancedMesh;
   private wobbling: { rec: TreeRec; t: number; axis: THREE.Vector3 }[] = [];
@@ -153,6 +174,7 @@ export class Planet {
     this.buildBoulders(rng);
     this.buildMesas(rng);
     this.buildCrystals(rng);
+    this.buildOres(rng);
     this.buildFloatingRocks(rng);
     this.buildMushrooms(rng);
     this.buildMountains(rng);
@@ -331,7 +353,7 @@ export class Planet {
       const cap = new THREE.Mesh(new THREE.CircleGeometry(r * 0.9, 24).rotateX(-Math.PI / 2), grassMat);
       cap.position.set(x, top + 0.05, z); this.group.add(cap);
       this.world.addPillar(x, z, BASE, top, r * 0.95, 0.15);
-      this.marks.mesas.push([x, z, r]);
+      this.marks.mesas.push([x, z, r]); this.mesaTops.push(top);
     }
     // spires like a giant stone mushroom: x, z, radius, height above the water
     for (const [x, z, r, hgt] of [[-45, -520, 7, 70], [120, -560, 9, 90], [-140, -300, 6, 55], [60, -235, 6, 48]]) {
@@ -370,6 +392,123 @@ export class Planet {
     });
     this.crystalMesh = mesh;
     this.group.add(mesh);
+  }
+
+  /** Ore deposits to mine: copper and iron in veins on the plains, gold on high ground, plasma on the lake mesas. */
+  private buildOres(rng: () => number): void {
+    const spots: { type: Ore; x: number; y: number; z: number; r: number }[] = [];
+    const vein = (type: Ore, veins: number, per: number, rMin: number, rMax: number) => {
+      for (let v = 0; v < veins; v++) {
+        const c = this.dryPoint(rng, 20, 215, ABOVE_WATER + 0.5);
+        for (let k = 0; k < per; k++) {
+          const a = rng() * Math.PI * 2, d = 1.5 + rng() * 7, x = c.x + Math.cos(a) * d, z = c.z + Math.sin(a) * d, y = heightAt(x, z);
+          if (y > ABOVE_WATER && pathMask(x, z) < 0.5) spots.push({ type, x, y, z, r: rMin + rng() * (rMax - rMin) });
+        }
+      }
+    };
+    vein('copper', 8, 3, 0.9, 1.6);
+    vein('iron', 7, 3, 0.9, 1.6);
+    // gold: the highest ground within reach
+    const high: { x: number; z: number; y: number }[] = [];
+    for (let i = 0; i < 500; i++) { const a = rng() * Math.PI * 2, r = 70 + rng() * 190, x = Math.cos(a) * r, z = Math.sin(a) * r; high.push({ x, z, y: heightAt(x, z) }); }
+    high.sort((a, b) => b.y - a.y);
+    for (const h of high) { if (spots.filter(s => s.type === 'gold').length >= 10) break; if (spots.some(s => s.type === 'gold' && Math.hypot(s.x - h.x, s.z - h.z) < 28)) continue; spots.push({ type: 'gold', x: h.x, y: h.y, z: h.z, r: 0.8 + rng() * 0.5 }); }
+    // plasma: on top of the mesas out in the lake
+    this.marks.mesas.forEach(([mx, mz, mr], i) => {
+      for (let k = 0; k < (mr > 40 ? 2 : 1); k++) { const a = rng() * Math.PI * 2, d = rng() * mr * 0.6; spots.push({ type: 'plasma', x: mx + Math.cos(a) * d, y: this.mesaTops[i], z: mz + Math.sin(a) * d, r: 1.1 + rng() * 0.5 }); }
+    });
+
+    // one rock mesh + one glowing-specks mesh per ore type, sharing instance matrices
+    const rockGeo = new THREE.IcosahedronGeometry(1, 1);
+    const speckParts: THREE.BufferGeometry[] = [];
+    const sr = rngFromSeed(5);
+    for (let i = 0; i < 11; i++) {
+      const g = new THREE.OctahedronGeometry(0.3 + sr() * 0.2, 0);
+      const a = sr() * Math.PI * 2, e = 0.1 + sr() * 1.1;
+      g.scale(0.7, 1.9, 0.7); g.rotateX((sr() - 0.5) * 0.9); g.rotateZ((sr() - 0.5) * 0.9);
+      g.translate(Math.cos(a) * Math.cos(e) * 0.88, Math.sin(e) * 0.7 + 0.1, Math.sin(a) * Math.cos(e) * 0.88);
+      speckParts.push(g);
+    }
+    const speckGeo = mergeGeometries(speckParts)!;
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion();
+    for (const type of Object.keys(ORE_DEF) as Ore[]) {
+      const def = ORE_DEF[type], mine = spots.filter(s => s.type === type);
+      const rock = new THREE.InstancedMesh(rockGeo, new THREE.MeshStandardMaterial({ color: def.rock, roughness: 1, flatShading: true }), mine.length);
+      const specks = new THREE.InstancedMesh(speckGeo, new THREE.MeshStandardMaterial({ color: def.color, emissive: def.color, emissiveIntensity: def.glow, metalness: type === 'gold' || type === 'copper' ? 0.5 : 0.2, roughness: 0.3, flatShading: true }), mine.length);
+      mine.forEach((s, k) => {
+        const slot = this.oreRecs.length;
+        q.setFromEuler(new THREE.Euler(0, rng() * 6.28, 0));
+        m.compose(new THREE.Vector3(s.x, s.y + s.r * 0.3, s.z), q, new THREE.Vector3(s.r, s.r * 0.75, s.r));
+        rock.setMatrixAt(k, m); specks.setMatrixAt(k, m);
+        this.world.addSphere(new THREE.Vector3(s.x, s.y + s.r * 0.35, s.z), s.r * 0.85, 0.3, ORE_OWNER + slot);
+        this.oreRecs.push({ type, x: s.x, y: s.y, z: s.z, r: s.r, hits: 0, broken: false, slot: k });
+      });
+      this.oreMeshes[type] = { rock, specks };
+      this.group.add(rock, specks);
+    }
+  }
+
+  /** Unmined ore deposits (for the Ore Scanner on the map). */
+  get oreMarks(): { type: Ore; x: number; z: number }[] { return this.oreRecs.filter(o => !o.broken); }
+
+  /** Hit an ore deposit. `tool` decides how many punches it takes. Returns punches left (0 = mined). */
+  hitOre(i: number, tool: 'hand' | 'pick' | 'iron'): number {
+    const o = this.oreRecs[i];
+    if (!o || o.broken) return 0;
+    const def = ORE_DEF[o.type];
+    const needed = tool === 'iron' ? 1 : tool === 'pick' ? Math.max(1, def.hits - 1) : def.hits;
+    o.hits++;
+    const at = new THREE.Vector3(o.x, o.y + o.r * 0.6, o.z);
+    if (o.hits < needed) { this.burst(at, 3, def.color, 0.12, 3); return needed - o.hits; }
+    o.broken = true;
+    this.world.removeOwner(ORE_OWNER + i);
+    this.hideOre(o);
+    this.burst(at, 10, def.color, 0.2, 5);
+    const amt = def.yield[0] + Math.floor(Math.random() * (def.yield[1] - def.yield[0] + 1)) + (tool === 'iron' && o.type !== 'plasma' ? 1 : 0);
+    this.onOre?.(o.type, amt, at);
+    return 0;
+  }
+
+  private hideOre(o: OreRec): void {
+    const z = new THREE.Matrix4().makeScale(0, 0, 0), mm = this.oreMeshes[o.type];
+    mm.rock.setMatrixAt(o.slot, z); mm.specks.setMatrixAt(o.slot, z);
+    mm.rock.instanceMatrix.needsUpdate = mm.specks.instanceMatrix.needsUpdate = true;
+  }
+
+  // ---------------- saving ----------------
+
+  /** Everything that changes during play, as plain data. */
+  exportState(): PlanetState {
+    const ids = <T extends { felled?: boolean; broken?: boolean }>(a: readonly T[]) => a.flatMap((r, i) => (r.felled || r.broken ? [i] : []));
+    return {
+      clock: this.clock,
+      felledTrees: ids(this.treeRecs), brokenBoulders: ids(this.boulderRecs), brokenCrystals: ids(this.crystalRecs), brokenOres: ids(this.oreRecs),
+      podAlive: this.podAlive,
+      podHead: [this.podHead.x, this.podHead.y, this.podHead.z], podForward: [this.podForward.x, this.podForward.y, this.podForward.z],
+      hub: this.hub ? { ...this.hub.pose } : null,
+      props: this.propList.map(p => ({ kind: p.kind, x: p.x, z: p.z })),
+    };
+  }
+
+  /** Put the world back the way a save left it (silently: no falling trees, no loot). Call before placePod. */
+  importState(s: PlanetState): void {
+    this.clock = s.clock;
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0), owners = new Set<number>();
+    for (const i of s.felledTrees) {
+      const r = this.treeRecs[i]; if (!r) continue;
+      r.felled = true; owners.add(i);
+      this.trunkMesh.setMatrixAt(r.trunkIdx, zero); (r.pine ? this.pineMesh : this.canopyMesh).setMatrixAt(r.foliageIdx, zero);
+    }
+    this.trunkMesh.instanceMatrix.needsUpdate = this.canopyMesh.instanceMatrix.needsUpdate = this.pineMesh.instanceMatrix.needsUpdate = true;
+    for (const i of s.brokenBoulders) { const b = this.boulderRecs[i]; if (!b) continue; b.broken = true; owners.add(BOULDER_OWNER + i); this.boulderMesh.setMatrixAt(i, zero); }
+    this.boulderMesh.instanceMatrix.needsUpdate = true;
+    for (const i of s.brokenCrystals) { const c = this.crystalRecs[i]; if (!c) continue; c.broken = true; owners.add(CRYSTAL_OWNER + i); this.crystalMesh.setMatrixAt(i, zero); }
+    this.crystalMesh.instanceMatrix.needsUpdate = true;
+    for (const i of s.brokenOres) { const o = this.oreRecs[i]; if (!o) continue; o.broken = true; owners.add(ORE_OWNER + i); this.hideOre(o); }
+    this.world.removeOwners(owners);
+    this.podAlive = s.podAlive;
+    if (s.hub) this.placeHub(s.hub.x, s.hub.z, s.hub.yaw, s.hub.y);
+    for (const pr of s.props) this.placeProp(pr.kind, pr.x, pr.z);
   }
 
   /** Rocks floating in the air: reachable by chaining launches off tall trees. */
@@ -825,6 +964,7 @@ export class Planet {
 
   /** Your escape pod, wedged in the ground a few metres behind where you landed. */
   placePod(head: THREE.Vector3, forward: THREE.Vector3): void {
+    this.podHead.copy(head); this.podForward.copy(forward);
     const back = new THREE.Vector3(-forward.x, 0, -forward.z).normalize();
     const x = head.x + back.x * 4.6, z = head.z + back.z * 4.6, y = heightAt(x, z);
     const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = Math.atan2(back.x, back.z);

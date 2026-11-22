@@ -29,6 +29,8 @@ export class Story {
     return true;
   }
 
+  reset(): void { this.phase = 'menu'; this.t = 0; this.skipping = false; }
+
   private go(p: Phase): void { this.phase = p; this.t = 0; }
 
   update(dt: number): void {

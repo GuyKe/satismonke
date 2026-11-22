@@ -96,6 +96,11 @@ export class Sfx {
     }
   }
 
+  stopWind(): void {
+    for (const n of this.windNodes) { try { (n as AudioScheduledSourceNode).stop?.(); } catch { /* already stopped */ } n.disconnect(); }
+    this.windNodes = [];
+  }
+
   /** Soft alien wind for the planet. */
   startWind(): void {
     if (!this.ctx || this.windNodes.length) return;

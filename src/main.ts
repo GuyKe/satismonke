@@ -4,7 +4,12 @@ import { CollisionWorld } from './physics/CollisionWorld';
 import { GorillaPlayer } from './player/GorillaPlayer';
 import { ArmCalibration } from './player/ArmCalibration';
 import { buildCapsule } from './world/Capsule';
-import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER } from './world/Planet';
+import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER, ORE_OWNER } from './world/Planet';
+import { MenuRoom, Slide } from './world/MenuRoom';
+import { takeSnapshots } from './world/Snapshots';
+import { MenuPanel, MenuHandlers } from './ui/MenuPanel';
+import { SaveData, readSlot, writeSlot, deleteSlot } from './game/Save';
+import { disposeObject } from './util/dispose';
 import { buildCampfire, buildLamp, makeGhost, PropKind } from './world/Props';
 import { buildHubMesh, HubMesh } from './world/Hub';
 import { heightAt } from './world/Terrain';
@@ -48,6 +53,24 @@ async function boot() {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x05070d);
   const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 6000);
+
+  // Pictures of the planet for the main-menu slideshow (skipped for the ?skip=planet debug shortcut)
+  const loadingDom = document.createElement('div');
+  loadingDom.textContent = 'Loading the planet...';
+  loadingDom.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font:bold 28px monospace;color:#ffb347;background:#05070d;z-index:10';
+  document.body.appendChild(loadingDom);
+  let slides: Slide[] = [];
+  if (debugSkip !== 'planet') {
+    await new Promise(r => setTimeout(r, 40));
+    try {
+      const snapPlanet = new Planet();
+      scene.add(snapPlanet.group);
+      slides = await takeSnapshots(renderer, scene, snapPlanet);
+      scene.remove(snapPlanet.group); disposeObject(snapPlanet.group);
+    } catch (e) { console.warn('slideshow unavailable', e); }
+    scene.fog = null; scene.background = new THREE.Color(0x05070d);
+  }
+  loadingDom.remove();
 
   const sfx = new Sfx();
   renderer.xr.addEventListener('sessionstart', () => sfx.ensure());
@@ -93,7 +116,7 @@ async function boot() {
   scene.add(map.mesh, craftPanel.mesh);
   let floating: 'map' | 'craft' | null = null;
   const setPanel = (p: 'map' | 'craft' | null) => {
-    floating = planet && !ship.visible ? p : null;
+    floating = appMode === 'game' && !pauseOpen && planet && !ship.visible ? p : null;
     map.mesh.visible = floating === 'map'; craftPanel.mesh.visible = floating === 'craft';
   };
 
@@ -132,47 +155,157 @@ async function boot() {
     progress.spend(r.cost); progress.made[r.id] = progress.count(r.id) + 1;
     if (!r.repeatable) progress.crafted.add(id);
     sfx.craft();
-    switch (id) {
-      case 'hub': case 'campfire': case 'lamp': startPlacing(id); break;
-      case 'lantern': lantern.position.set(0, -0.2, -0.2); camera.add(lantern); break;
-      case 'gloves': player.jumpMult = Math.max(player.jumpMult, 1.5); player.maxSpeed = Math.max(player.maxSpeed, 10); break;
-      case 'crystalgloves': player.jumpMult = 1.8; player.maxSpeed = 12; break;
-      case 'sticky': player.slipScale = 0.3; break;
-      case 'floatcore': player.gravityG = 0.35; break;
-      default: break; // axe, pickaxe: read from progress when you punch
+    if (id === 'hub' || id === 'campfire' || id === 'lamp') startPlacing(id);
+    applyGear();
+  };
+
+  // ---- Game state: main menu <-> game ----
+  let appMode: 'menu' | 'game' = 'menu';
+  let planet: Planet | null = null;
+  let currentSlot = 0, playSeconds = 0, autosave = 0, pauseOpen = false;
+  const MENU_SPAWN = new THREE.Vector3(0, 0, 2.4);
+
+  /** Gear you own changes how you move and mine. Safe to call any time (also after loading a save). */
+  const applyGear = () => {
+    player.jumpMult = settings.jumpMult; player.maxSpeed = settings.maxSpeed;
+    if (progress.has('gloves')) { player.jumpMult = 1.5; player.maxSpeed = 10; }
+    if (progress.has('crystalgloves')) { player.jumpMult = 1.8; player.maxSpeed = 12; }
+    player.slipScale = progress.has('sticky') ? 0.3 : 1;
+    if (planet) player.gravityG = progress.has('plasmacore') ? 0.2 : progress.has('floatcore') ? 0.35 : PLANET_GRAVITY_G;
+    if (progress.has('lantern')) {
+      const bright = progress.has('copperlantern');
+      lantern.intensity = bright ? 6 : 3; lantern.distance = bright ? 28 : 16;
+      lantern.position.set(0, -0.2, -0.2); camera.add(lantern);
+    } else camera.remove(lantern);
+    map.showOre = progress.has('scanner');
+  };
+
+  const hookPlanet = (pl: Planet) => {
+    pl.onRoar = (pos, kind) => sfx.roar(pos, kind);
+    pl.onTreeLanded = pos => sfx.thump(pos);
+    pl.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); progress.treesFelled++; sfx.pickup(); toast(`+${k} wood`, pos); };
+    pl.onStone = (n, pos) => { const k = n + (progress.has('ironpick') ? 2 : progress.has('pickaxe') ? 1 : 0); progress.add('stone', k); progress.bouldersBroken++; sfx.crumble(); toast(`+${k} stone`, pos); };
+    pl.onCrystal = (n, pos) => { progress.add('crystal', n); sfx.crumble(); sfx.pickup(); toast(`+${n} crystal`, pos); };
+    pl.onOre = (type, n, pos) => { progress.add(type, n); progress.mined[type]++; sfx.crumble(); sfx.pickup(); toast(`+${n} ${type}`, pos); };
+    pl.onPodDestroyed = pos => { progress.podDestroyed = true; progress.podHits = POD_HITS; progress.add('steel', POD_STEEL); sfx.crumble(); toast(`+${POD_STEEL} steel`, pos); };
+  };
+
+  const buildHubUi = (built: { mesh: HubMesh; group: THREE.Group }) => {
+    const bench = new RecipePanel('CRAFTING BENCH', RECIPES.filter(r => r.where === 'bench'), progress, id => craft(id), 'Unlock more by exploring', 1.15, 6);
+    const computer = new ComputerScreen(() => { progress.gamePlayed = true; });
+    bench.mesh.position.copy(built.mesh.benchScreenAt);
+    computer.mesh.position.copy(built.mesh.computerScreenAt);
+    built.group.add(bench.mesh, computer.mesh);
+    hubUi = { bench, computer };
+  };
+
+  /** Land on the planet: a fresh landing (d = null) or a loaded save. */
+  const startPlanet = (d: SaveData | null) => {
+    const pl = new Planet(); planet = pl;
+    ship.visible = false;
+    scene.add(pl.group);
+    player.world = pl.world;
+    hookPlanet(pl);
+    if (d && d.planet) {
+      progress.load(d.progress);
+      pl.importState(d.planet);
+      if (d.planet.podAlive) pl.placePod(new THREE.Vector3(...d.planet.podHead), new THREE.Vector3(...d.planet.podForward));
+      if (pl.hub) buildHubUi(pl.hub);
+      applyGear();
+      player.teleport(new THREE.Vector3(d.player.x, d.player.y, d.player.z));
+      story.phase = 'planet';
+    } else {
+      player.teleport(new THREE.Vector3(0, 0.1, 0));
+      // Your pod sits behind wherever you are facing when you land
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); fwd.y = 0;
+      if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
+      pl.placePod(new THREE.Vector3().copy(player.position).add(camera.position), fwd.normalize());
+      applyGear();
     }
+    sfx.startWind();
+  };
+
+  const saveGame = (): boolean => {
+    const onPlanet = !!planet && (story.phase === 'planet' || story.phase === 'landing');
+    const d: SaveData = {
+      version: 1, savedAt: Date.now(), playSeconds: Math.round(playSeconds),
+      phase: onPlanet ? 'planet' : 'capsule', objective: onPlanet ? progress.objective()[0] : 'In the pod',
+      progress: progress.toJSON(), player: { x: player.position.x, y: player.position.y, z: player.position.z },
+      planet: onPlanet ? planet!.exportState() : null,
+    };
+    return writeSlot(currentSlot, d);
+  };
+
+  /** Throw away everything about the running game. */
+  const resetGame = () => {
+    if (planet) { scene.remove(planet.group); disposeObject(planet.group); planet = null; }
+    scene.fog = null; scene.background = new THREE.Color(0x05070d);
+    progress.reset(); placing = null;
+    if (ghost) { scene.remove(ghost.group); ghost = null; }
+    ghostPose = null; hubUi = null;
+    for (const t of toasts) scene.remove(t.sprite);
+    toasts.length = 0;
+    floating = null; map.mesh.visible = craftPanel.mesh.visible = false; map.showOre = false;
+    camera.remove(lantern);
+    player.world = shipWorld; player.gravityG = settings.gravityG; player.jumpMult = settings.jumpMult; player.maxSpeed = settings.maxSpeed; player.slipScale = 1;
+    sfx.stopWind(); sfx.stopAlarm(); sfx.rumble(0);
+    story.reset(); menu.reset(); ship.position.set(0, 0, 0); overlay.set(0, 0);
+    pauseOpen = false; pausePanel.mesh.visible = false;
+  };
+
+  const enterMainMenu = (save: boolean) => {
+    if (save && appMode === 'game') saveGame();
+    resetGame();
+    appMode = 'menu'; ship.visible = false; menuRoom.group.visible = true;
+    player.world = menuRoom.world; player.teleport(MENU_SPAWN);
+    mainPanel.open();
+  };
+
+  const beginGame = (slot: number, mode: 'new' | 'load') => {
+    const d = mode === 'load' ? readSlot(slot) : null;
+    resetGame();
+    currentSlot = slot; appMode = 'game'; menuRoom.group.visible = false; autosave = 0;
+    playSeconds = d ? d.playSeconds : 0;
+    if (d && d.phase === 'planet' && d.planet) startPlanet(d);
+    else { ship.visible = true; player.teleport(SPAWN); story.reset(); if (!d) saveGame(); }
+  };
+
+  const togglePause = (open?: boolean) => {
+    if (appMode !== 'game') return;
+    pauseOpen = open ?? !pauseOpen;
+    pausePanel.mesh.visible = pauseOpen;
+    if (pauseOpen) { pausePanel.open(); setPanel(null); }
   };
 
   // ---- Story: Play -> alarm -> crash -> title -> planet ----
-  let planet: Planet | null = null;
-  const land = () => {
-    planet = new Planet();
-    ship.visible = false;
-    scene.add(planet.group);
-    player.world = planet.world;
-    player.gravityG = PLANET_GRAVITY_G;
-    player.teleport(new THREE.Vector3(0, 0.1, 0));
-    // Your pod sits behind wherever you are facing when you land
-    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); fwd.y = 0;
-    if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
-    planet.placePod(new THREE.Vector3().copy(player.position).add(camera.position), fwd.normalize());
-    planet.onRoar = (pos, kind) => sfx.roar(pos, kind);
-    planet.onTreeLanded = pos => sfx.thump(pos);
-    planet.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); progress.treesFelled++; sfx.pickup(); toast(`+${k} wood`, pos); };
-    planet.onStone = (n, pos) => { const k = n + (progress.has('pickaxe') ? 1 : 0); progress.add('stone', k); progress.bouldersBroken++; sfx.crumble(); toast(`+${k} stone`, pos); };
-    planet.onCrystal = (n, pos) => { progress.add('crystal', n); sfx.crumble(); sfx.pickup(); toast(`+${n} crystal`, pos); };
-    planet.onPodDestroyed = pos => { progress.podDestroyed = true; progress.podHits = POD_HITS; progress.add('steel', POD_STEEL); sfx.crumble(); toast(`+${POD_STEEL} steel`, pos); };
-    sfx.startWind();
-  };
   const story = new Story({
     onAlarm: () => {
       sfx.ensure(); sfx.startAlarm();
       menu.showMessage(['THRUSTERS FAILED', 'DEPLOYING EMERGENCY', 'BRAKES']);
     },
     onCrash: () => { sfx.stopAlarm(); sfx.crash(); },
-    onLand: land,
+    onLand: () => startPlanet(null),
     onSkip: () => { sfx.stopAlarm(); sfx.duck(); },   // B in the capsule: straight to the title
   });
+
+  // ---- Main menu room (slideshow of the map) and the pause menu ----
+  const menuRoom = new MenuRoom(slides);
+  menuRoom.group.add(new THREE.HemisphereLight(0xffffff, 0x556677, 1.2));
+  scene.add(menuRoom.group);
+  menuRoom.group.visible = false;
+  const handlers: MenuHandlers = {
+    onStart: (slot, mode) => beginGame(slot, mode),
+    onDelete: slot => deleteSlot(slot),
+    onResume: () => togglePause(false),
+    onSave: () => pausePanel.flash(saveGame() ? 'Game saved' : 'Could not save'),
+    onMainMenu: () => enterMainMenu(true),
+  };
+  const mainPanel = new MenuPanel('main', handlers, 2.0);
+  mainPanel.mesh.position.set(0, 1.05, -1.7);
+  menuRoom.group.add(mainPanel.mesh);
+  const pausePanel = new MenuPanel('pause', handlers, 1.1);
+  pausePanel.mesh.visible = false;
+  scene.add(pausePanel.mesh);
 
   // ---- Console + screens (on the ship) ----
   const menu = new MenuConsole(() => story.start());
@@ -231,11 +364,11 @@ async function boot() {
   // Buttons (Quest Touch): right A = buttons[4], right B = buttons[5], left X = buttons[4], grip = buttons[1]
   const btn = (i: number, b: number) => !!inputs[i]?.gamepad?.buttons[b]?.pressed;
   const handBtn = (hand: 'left' | 'right', b: number) => [0, 1].some(i => inputs[i]?.handedness === hand && btn(i, b));
-  const keys = { a: false, b: false, x: false, grip: false };
-  const keyMap: Record<string, keyof typeof keys> = { KeyM: 'a', KeyB: 'b', KeyX: 'x', KeyG: 'grip' };
+  const keys = { a: false, b: false, x: false, grip: false, menu: false };
+  const keyMap: Record<string, keyof typeof keys> = { KeyM: 'a', KeyB: 'b', KeyX: 'x', KeyG: 'grip', Escape: 'menu' };
   addEventListener('keydown', e => { const k = keyMap[e.code]; if (k) keys[k] = true; });
   addEventListener('keyup', e => { const k = keyMap[e.code]; if (k) keys[k] = false; });
-  let aPrev = false, bPrev = false, xPrev = false;
+  let aPrev = false, bPrev = false, xPrev = false, yPrev = false;
 
   // ---- Desktop preview: drag to look, click the menu ----
   const mouse = new THREE.Vector2();
@@ -254,7 +387,8 @@ async function boot() {
     renderer.setSize(innerWidth, innerHeight);
   });
 
-  if (debugSkip === 'planet') { land(); story.phase = 'planet'; }
+  if (debugSkip === 'planet') { appMode = 'game'; menuRoom.group.visible = false; startPlanet(null); story.phase = 'planet'; }
+  else enterMainMenu(false);
 
   // ---- Alarm lighting ----
   const baseHemi = capsule.lights.hemi.intensity;
@@ -292,12 +426,7 @@ async function boot() {
     if (kind === 'hub') {
       const built = planet.placeHub(gp.x, gp.z, gp.yaw, gp.y);
       progress.hubPlaced = true;
-      const bench = new RecipePanel('CRAFTING BENCH', RECIPES.filter(r => r.where === 'bench'), progress, id => craft(id), 'Unlock more by exploring', 1.15);
-      const computer = new ComputerScreen(() => { progress.gamePlayed = true; });
-      bench.mesh.position.copy(built.mesh.benchScreenAt);
-      computer.mesh.position.copy(built.mesh.computerScreenAt);
-      built.group.add(bench.mesh, computer.mesh);
-      hubUi = { bench, computer };
+      buildHubUi(built);
       sfx.craft(); sfx.thump(new THREE.Vector3(gp.x, gp.y, gp.z));
       toast('Hub built!', new THREE.Vector3(gp.x, gp.y + 3.5, gp.z));
     } else {
@@ -318,14 +447,21 @@ async function boot() {
     elapsed += dt;
     const inXR = renderer.xr.isPresenting;
 
-    story.update(dt);
+    const simDt = appMode === 'game' && pauseOpen ? 0 : dt; // the game stands still while the pause menu is open
+    if (appMode === 'game' && !pauseOpen) { playSeconds += dt; }
+    story.update(simDt);
 
     // Buttons
-    const aNow = keys.a || handBtn('right', 4), bNow = keys.b || handBtn('right', 5), xNow = keys.x || handBtn('left', 4);
-    if (aNow && !aPrev) setPanel(floating === 'map' ? null : 'map');        // A: map
-    if (xNow && !xPrev) setPanel(floating === 'craft' ? null : 'craft');    // X: crafting
-    if (bNow && !bPrev) { if (ship.visible) story.skipToTitle(); else cancelPlacing(); } // B: skip the crash scene (capsule) / cancel placing (planet)
-    aPrev = aNow; bPrev = bNow; xPrev = xNow;
+    const aNow = keys.a || handBtn('right', 4), bNow = keys.b || handBtn('right', 5), xNow = keys.x || handBtn('left', 4), yNow = keys.menu || handBtn('left', 5);
+    if (appMode === 'game') {
+      if (yNow && !yPrev) togglePause();                                        // Y / Esc: pause menu
+      if (!pauseOpen) {
+        if (aNow && !aPrev) setPanel(floating === 'map' ? null : 'map');        // A: map
+        if (xNow && !xPrev) setPanel(floating === 'craft' ? null : 'craft');    // X: crafting
+        if (bNow && !bPrev) { if (ship.visible) story.skipToTitle(); else cancelPlacing(); } // B: skip the crash scene (capsule) / cancel placing (planet)
+      }
+    }
+    aPrev = aNow; bPrev = bNow; xPrev = xNow; yPrev = yNow;
     const gripDown = [keys.grip || btn(0, 1), keys.grip || btn(1, 1)];
     overlay.set(story.blackAlpha, story.titleAlpha);
     sfx.rumble(story.rumble);
@@ -338,11 +474,11 @@ async function boot() {
       });
       arms.observe(dt, raw[0], raw[1]);
       const handLocals = raw.map((r, i) => (r ? arms.apply(camera.position, r, sl[i]) : null));
-      player.update(dt, camera.position, handLocals);
+      player.update(simDt, camera.position, handLocals);
     } else {
       camera.position.copy(headStand);
       camera.rotation.set(pitch, yaw, 0, 'YXZ');
-      player.update(dt, headStand, [null, null]);
+      player.update(simDt, headStand, [null, null]);
     }
     rig.position.copy(player.position);
     torso.visible = inXR;
@@ -357,7 +493,7 @@ async function boot() {
 
     // Grip + punch: fell trees, smash boulders (stone) and the crashed pod (steel)
     const headW = new THREE.Vector3().copy(player.position).add(camera.position);
-    if (planet && !ship.visible) {
+    if (planet && appMode === 'game' && !pauseOpen && !ship.visible) {
       player.hands.forEach((h, i) => {
         if (!h.started || !gripDown[i]) return;
         const id = player.world.ownerAt(h.contact);
@@ -367,6 +503,9 @@ async function boot() {
         if (h.impact < need) return;
         if (id === POD_OWNER) {
           const left = planet!.hitPod(POD_HITS); progress.podHits = POD_HITS - left;
+          if (left) sfx.clink(); buzz(i, 1, 90);
+        } else if (id >= ORE_OWNER) {
+          const left = planet!.hitOre(id - ORE_OWNER, progress.has('ironpick') ? 'iron' : progress.has('pickaxe') ? 'pick' : 'hand');
           if (left) sfx.clink(); buzz(i, 1, 90);
         } else if (id >= CRYSTAL_OWNER) {
           const left = planet!.hitCrystal(id - CRYSTAL_OWNER, progress.has('pickaxe') ? 1 : CRYSTAL_HITS);
@@ -385,7 +524,9 @@ async function boot() {
     // Everything you can point at right now
     scene.updateMatrixWorld(true);
     const targets: Interactive[] = [];
-    if (ship.visible) targets.push(menu);
+    if (appMode === 'menu') targets.push(mainPanel);
+    else if (pauseOpen) targets.push(pausePanel);
+    else if (ship.visible) targets.push(menu);
     else {
       if (floating === 'map') targets.push(map);
       if (floating === 'craft') targets.push(craftPanel);
@@ -424,6 +565,13 @@ async function boot() {
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); fwd.y = 0;
     if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
     fwd.normalize();
+    if (appMode === 'menu') { menuRoom.update(dt); mainPanel.update(dt); }
+    if (pauseOpen) {
+      const target = headW.clone().addScaledVector(fwd, 0.85); target.y = headW.y - 0.05;
+      pausePanel.mesh.position.lerp(target, 1 - Math.exp(-8 * dt));
+      pausePanel.mesh.lookAt(headW);
+      pausePanel.update(dt);
+    }
     if (floating && planet) {
       const panel = floating === 'map' ? map.mesh : craftPanel.mesh;
       const target = headW.clone().addScaledVector(fwd, 0.85); target.y = headW.y - 0.1;
@@ -457,7 +605,7 @@ async function boot() {
     // Wrist displays and the desktop text overlay
     const obj = progress.objective();
     resourceHud.set(progress); objectiveHud.set(obj);
-    hudDom.style.display = planet && !inXR ? 'block' : 'none';
+    hudDom.style.display = appMode === 'game' && planet && !inXR && !pauseOpen ? 'block' : 'none';
     hudDom.textContent = `OBJECTIVE: ${obj[0]}\n${obj[1]}\nwood ${progress.items.wood}  stone ${progress.items.stone}  steel ${progress.items.steel}\n[M] map  [X] craft  [G+punch] hit  [click] use`;
     for (let i = toasts.length - 1; i >= 0; i--) {
       const t = toasts[i]; t.t += dt;
@@ -467,14 +615,16 @@ async function boot() {
     }
 
     if (inXR || planet) sfx.setListener(headW, new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion));
-    if (planet) planet.update(dt, scene, player.position, headW);
+    if (planet) planet.update(simDt, scene, player.position, headW);
+    if (appMode === 'game' && planet && story.phase === 'planet' && !pauseOpen && (autosave += dt) > 45) { autosave = 0; saveGame(); }
 
     renderer.render(scene, camera);
   });
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, renderer, scene, player, story, settings, menu,
+    progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },
     get placing() { return placing; }, get ghostPose() { return ghostPose; }, get hubUi() { return hubUi; },
