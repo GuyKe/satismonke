@@ -598,6 +598,7 @@ export class Planet {
     });
     return best;
   }
+  isOreFree(index: number): boolean { const o = this.oreRecs[index]; return !!o && !o.broken && !this.oreOccupied.has(index); }
   setOreOccupied(index: number, on: boolean): void { if (on) this.oreOccupied.add(index); else this.oreOccupied.delete(index); }
 
   /** Is this open, level, dry ground for a machine? */
