@@ -2,10 +2,13 @@ import * as THREE from 'three';
 import { Screen } from './Screen';
 import { SaveData, SLOTS, listSlots, formatAgo, formatPlaytime } from '../game/Save';
 import type { Settings, Quality } from '../settings';
+import { CODE_CHARS, CODE_LEN } from '../net/Multiplayer';
 import { CONTROLS_LINES, HOWTO_LINES, RESOURCE_GUIDE } from './helpText';
 
 const W = 800, H = 500;
-type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide';
+type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby';
+
+export interface LobbyInfo { code: string; isHost: boolean; status: 'connecting' | 'lobby' | 'game' | 'error'; error: string; players: { name: string; color: number }[] }
 const GUIDE_PER_PAGE = 4;
 
 interface Btn { label: string; x: number; y: number; w: number; h: number; act: () => void; danger?: boolean; dim?: boolean }
@@ -20,6 +23,10 @@ export interface MenuHandlers {
   /** A setting changed: persist and apply it. */
   onSettings(): void;
   onResetArms(): void;
+  onHost(): void;
+  onJoin(code: string): void;
+  onLeaveLobby(): void;
+  onStartLobby(): void;
 }
 
 /** The main menu (PLAY / CONTROLS / HOW TO PLAY, with save slots) and the in-game pause menu. */
@@ -34,6 +41,8 @@ export class MenuPanel extends Screen {
   private statusT = 0;
   private dirty = true;
   private guidePage = 0;
+  private lobby: LobbyInfo | null = null;
+  private code = '';
 
   constructor(private kind: 'main' | 'pause', private h: MenuHandlers, private settings: Settings, width = 2.0) {
     super(width, width * H / W, W, H);
@@ -42,6 +51,16 @@ export class MenuPanel extends Screen {
   }
 
   open(): void { this.page = this.kind === 'main' ? 'main' : 'pause'; this.hovered.clear(); this.build(); }
+  /** The lobby changed (or ended): show the right page. */
+  setLobby(l: LobbyInfo | null): void {
+    this.lobby = l;
+    if (this.kind === 'main') {
+      if (l && (this.page === 'multi' || this.page === 'join' || this.page === 'lobby')) this.go('lobby');
+      else if (!l && this.page === 'lobby') this.go('multi');
+    }
+    this.dirty = true;
+    this.build();
+  }
   flash(text: string): void { this.status = text; this.statusT = 2.5; this.dirty = true; }
 
   private go(p: Page): void { this.page = p; this.hovered.clear(); this.armedDelete = -1; this.build(); }
@@ -54,7 +73,7 @@ export class MenuPanel extends Screen {
       labels.map(([label, act], i) => ({ label, act, x: 190, y: y0 + i * (bh + gap), w: 420, h: bh }));
     switch (this.page) {
       case 'main':
-        this.btns = col([['PLAY', () => { this.slots = listSlots(); this.go('slots'); }], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['FIND RESOURCES', () => this.go('guide')], ['SETTINGS', () => this.go('settings')]], 126, 56, 12);
+        this.btns = col([['PLAY', () => { this.slots = listSlots(); this.go('slots'); }], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['FIND RESOURCES', () => this.go('guide')], ['MULTIPLAYER', () => this.go('multi')], ['SETTINGS', () => this.go('settings')]], 122, 48, 8);
         break;
       case 'pause':
         this.btns = col([['RESUME', () => this.h.onResume()], ['SAVE GAME', () => this.h.onSave()], ['SETTINGS', () => this.go('settings')], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['FIND RESOURCES', () => this.go('guide')], ['SAVE & MAIN MENU', () => this.h.onMainMenu()]], 84, 50, 8);
@@ -75,6 +94,28 @@ export class MenuPanel extends Screen {
         }
         this.btns.push(this.back());
         break;
+      case 'multi':
+        this.btns = col([['CREATE LOBBY', () => this.h.onHost()], ['JOIN WITH CODE', () => { this.code = ''; this.go('join'); }]], 140, 76, 20);
+        this.btns.push(this.back());
+        break;
+      case 'join': {
+        this.btns = [];
+        const per = 8;
+        [...CODE_CHARS].forEach((c, i) => this.btns.push({ label: c, x: 28 + (i % per) * 94, y: 168 + Math.floor(i / per) * 58, w: 86, h: 50, act: () => { if (this.code.length < CODE_LEN) this.code += c; this.build(); } }));
+        this.btns.push(
+          { label: 'DEL', x: 28, y: 410, w: 170, h: 60, danger: true, act: () => { this.code = this.code.slice(0, -1); this.build(); } },
+          { label: 'JOIN', x: 314, y: 410, w: 170, h: 60, dim: this.code.length < CODE_LEN, act: () => { if (this.code.length === CODE_LEN) this.h.onJoin(this.code); } },
+          { label: 'BACK', x: 602, y: 410, w: 170, h: 60, act: () => this.go('multi') },
+        );
+        break;
+      }
+      case 'lobby': {
+        const l = this.lobby;
+        this.btns = [];
+        if (l && l.status === 'lobby' && l.isHost) this.btns.push({ label: 'START GAME', x: 190, y: 330, w: 420, h: 66, act: () => this.h.onStartLobby() });
+        this.btns.push({ label: l && l.status === 'error' ? 'BACK' : 'LEAVE LOBBY', x: 250, y: 410, w: 300, h: 60, danger: true, act: () => { this.h.onLeaveLobby(); this.go('multi'); } });
+        break;
+      }
       case 'controls': case 'howto':
         this.btns = [this.back()];
         break;
@@ -137,10 +178,38 @@ export class MenuPanel extends Screen {
     ctx.fillStyle = '#080c18'; ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 6; ctx.strokeRect(5, 5, W - 10, H - 10);
     ctx.fillStyle = '#ffb347';
-    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES' };
+    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY' };
     ctx.font = this.page === 'main' ? 'bold 72px monospace' : 'bold 48px monospace';
     ctx.fillText(titles[this.page], W / 2, this.page === 'main' ? 110 : 66);
 
+    if (this.page === 'multi') {
+      ctx.fillStyle = '#9ab'; ctx.font = '20px monospace';
+      ctx.fillText('Play the planet with friends. One of you creates a lobby,', W / 2, 108);
+      ctx.fillText('the others type its 4-letter code. Everyone starts fresh.', W / 2, 132);
+    }
+    if (this.page === 'join') {
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 64px monospace';
+      ctx.fillText((this.code + '_'.repeat(CODE_LEN - this.code.length)).split('').join(' '), W / 2, 130);
+    }
+    if (this.page === 'lobby') {
+      const l = this.lobby;
+      if (!l) { ctx.fillStyle = '#9ab'; ctx.font = '26px monospace'; ctx.fillText('Not in a lobby', W / 2, 200); }
+      else if (l.status === 'error') { ctx.fillStyle = '#ff8a8a'; ctx.font = 'bold 26px monospace'; ctx.fillText(l.error || 'Something went wrong', W / 2, 220); }
+      else if (l.status === 'connecting') { ctx.fillStyle = '#9ab'; ctx.font = '28px monospace'; ctx.fillText('Connecting...', W / 2, 220); }
+      else {
+        ctx.fillStyle = '#9ab'; ctx.font = '22px monospace'; ctx.fillText('LOBBY CODE', W / 2, 104);
+        ctx.fillStyle = '#7fe3c1'; ctx.font = 'bold 72px monospace'; ctx.fillText(l.code.split('').join(' '), W / 2, 172);
+        ctx.textAlign = 'left'; ctx.font = '24px monospace';
+        l.players.slice(0, 8).forEach((p, i) => {
+          const x = 60 + (i % 2) * 360, y = 220 + Math.floor(i / 2) * 26;
+          ctx.fillStyle = '#' + p.color.toString(16).padStart(6, '0'); ctx.fillRect(x, y - 16, 16, 16);
+          ctx.fillStyle = '#d8e8f0'; ctx.fillText(p.name, x + 26, y);
+        });
+        ctx.textAlign = 'center'; ctx.fillStyle = '#9ab'; ctx.font = '20px monospace';
+        if (!l.isHost) ctx.fillText('Waiting for the host to start...', W / 2, 372);
+      }
+    }
+    if (this.page === 'pause' && this.lobby && this.lobby.code) { ctx.fillStyle = '#7fe3c1'; ctx.font = 'bold 18px monospace'; ctx.textAlign = 'right'; ctx.fillText(`LOBBY ${this.lobby.code} - ${this.lobby.players.length} players`, W - 22, 36); ctx.textAlign = 'center'; }
     if (this.page === 'controls' || this.page === 'howto') {
       ctx.textAlign = 'left'; ctx.font = '22px monospace'; ctx.fillStyle = '#d8e8f0';
       (this.page === 'controls' ? CONTROLS_LINES : HOWTO_LINES).forEach((l, i) => ctx.fillText(l, 40, 112 + i * 30));
@@ -178,9 +247,9 @@ export class MenuPanel extends Screen {
     }
     this.btns.forEach((b, i) => {
       const hot = [...this.hovered.values()].includes(i);
-      ctx.fillStyle = hot ? '#ffb347' : b.danger ? '#4a1c22' : '#1c2a4a'; ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.fillStyle = b.dim ? '#141a2a' : hot ? '#ffb347' : b.danger ? '#4a1c22' : '#1c2a4a'; ctx.fillRect(b.x, b.y, b.w, b.h);
       ctx.strokeStyle = b.danger ? '#ff6a6a' : '#ffb347'; ctx.lineWidth = 3; ctx.strokeRect(b.x, b.y, b.w, b.h);
-      ctx.fillStyle = hot ? '#10131f' : '#fff'; ctx.font = `bold ${b.h > 70 ? 36 : 28}px monospace`;
+      ctx.fillStyle = b.dim ? '#4a5568' : hot ? '#10131f' : '#fff'; ctx.font = `bold ${b.h > 70 ? 36 : b.h < 52 ? 24 : 28}px monospace`;
       ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 11);
     });
     if (this.status) { ctx.fillStyle = '#7fe3c1'; ctx.font = 'bold 24px monospace'; ctx.fillText(this.status, W / 2, H - 22); }

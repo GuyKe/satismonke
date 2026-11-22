@@ -169,3 +169,10 @@ NOT verified: anything on a real headset or under IWER. That includes controller
 
 ## Dialogue
 `src/ui/dialogue.ts` holds the `D` library (VESPER + alien variants per event key). `Narrator.sometimes(key, variants, cooldown, low)` picks a random variant (never repeating), rate-limits per key, and drops low-priority chatter while busy. Triggers live in `src/main.ts` via `chat()` / `first()`: crafting (`craft_<id>`), gathering, loot/artifacts, factory, building, health, day/night, hub, map, arcade, milestones and an idle chatter timer. `narrator.log` records spoken lines for tests.
+
+## Multiplayer (branch claude/multiplayer)
+- Main menu -> MULTIPLAYER -> CREATE LOBBY (shows a 4-character code) or JOIN WITH CODE (on-screen keypad). The host presses START GAME and everyone lands on the same planet (same seed and day/night clock).
+- `src/net/Multiplayer.ts`: PeerJS (WebRTC) star topology. The host's peer id is `satismonke-<CODE>`; clients connect to it and the host relays poses (12 Hz) and the day clock. No game server of our own; signalling uses PeerJS's free public broker.
+- `src/world/RemotePlayers.ts`: friends appear as a head, torso, two hands and a name tag.
+- Not shared yet: creatures, felled trees, ores, machines and buildings are simulated per player; inventory/progress is per player. Lobby games are not saved.
+- Test locally without the public broker: run a PeerServer on 127.0.0.1:9000 and open the game with `?peerhost=127.0.0.1&peerport=9000`; `tests/multiplayer.mjs` drives two browsers.
