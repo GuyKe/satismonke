@@ -8,6 +8,7 @@ import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER, ORE_OWNER, MACHINE_OWN
 import { BuildSystem, Plan, Piece, PieceType, PALETTE, COST as BUILD_COST, COLOR_COST, geometry as pieceGeometry } from './world/BuildSystem';
 import { BuildPanel } from './ui/BuildPanel';
 import { Narrator, LINES, Line } from './ui/Narrator';
+import { D } from './ui/dialogue';
 import { Health, Gear, damagePerSecond, fallDamage } from './game/Hazards';
 import { toWorld } from './world/Hub';
 import { Factory, MachineKind, ITEM_NAME } from './game/Factory';
@@ -20,7 +21,7 @@ import { SaveData, readSlot, writeSlot, deleteSlot } from './game/Save';
 import { disposeObject } from './util/dispose';
 import { buildCampfire, buildLamp, makeGhost, PropKind } from './world/Props';
 import { buildHubMesh, HubMesh } from './world/Hub';
-import { heightAt } from './world/Terrain';
+import { heightAt, WATER_Y } from './world/Terrain';
 import { MenuConsole } from './ui/MenuConsole';
 import { TelemetryScreen } from './ui/TelemetryScreen';
 import { LaserPointer } from './ui/LaserPointer';
@@ -102,6 +103,8 @@ async function boot() {
   const overlay = new Overlay(camera);
   const narrator = new Narrator(camera, () => settings.volume);
   const health = new Health();
+  const chat = (key: string, cooldown = 60, low = false) => { const v = D[key]; return v ? narrator.sometimes(key, v, cooldown, low) : false; };
+  const first = (key: string) => { const v = D[key]; if (v) narrator.once(key, v[0]); };
   const say = (key: keyof typeof LINES) => narrator.once(key, [...LINES[key]] as Line[]);
 
   // ---- Progress, crafting, HUDs ----
@@ -129,6 +132,7 @@ async function boot() {
   scene.add(map.mesh, craftPanel.mesh);
   let floating: 'map' | 'craft' | null = null;
   const setPanel = (p: 'map' | 'craft' | null) => {
+    if (p === 'map') first('map');
     floating = appMode === 'game' && !pauseOpen && planet && !ship.visible ? p : null;
     map.mesh.visible = floating === 'map'; craftPanel.mesh.visible = floating === 'craft';
   };
@@ -141,6 +145,7 @@ async function boot() {
   const machinePanel = new MachinePanel(factory, (a, id, arg) => machineAction(a, id, arg), () => progress.has('overclockst') && progress.items.core > 0);
   machinePanel.mesh.visible = false; scene.add(machinePanel.mesh);
   let factoryView: FactoryView | null = null;
+  let lastPhase = 'day', knownSites = 0, hubSeen = false, idleT = 120;
   let linkMode = false, linkFrom: number | null = null, wasTripped = false;
   let hoveredMachine: number | null = null, selectedMachine: number | null = null, selectHold = 0;
   let placing: 'hub' | PropKind | MachineKind | null = null;
@@ -202,6 +207,7 @@ async function boot() {
     if (!r.repeatable) progress.crafted.add(id);
     sfx.craft();
     if (id === 'hub' || id === 'campfire' || id === 'lamp' || isMachine(id)) startPlacing(id);
+    chat('craft_' + id, 5);
     if (id === 'lab') say('lab');
     if (id === 'beacon') say('beacon');
     if (id === 'reactor') say('reactor');
@@ -235,25 +241,25 @@ async function boot() {
   };
 
   const hookPlanet = (pl: Planet) => {
-    pl.onRoar = (pos, kind) => sfx.roar(pos, kind);
+    pl.onRoar = (pos, kind) => { sfx.roar(pos, kind); chat(kind === 'serpent' ? 'roar_serpent' : kind === 'manta' ? 'roar_manta' : 'creature', 90, true); };
     pl.onTreeLanded = pos => sfx.thump(pos);
-    pl.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); progress.treesFelled++; sfx.pickup(); toast(`+${k} wood`, pos); };
-    pl.onStone = (n, pos) => { const k = n + (progress.has('ironpick') ? 2 : progress.has('pickaxe') ? 1 : 0); progress.add('stone', k); progress.bouldersBroken++; sfx.crumble(); toast(`+${k} stone`, pos); };
-    pl.onCrystal = (n, pos) => { progress.add('crystal', n); sfx.crumble(); sfx.pickup(); toast(`+${n} crystal`, pos); };
-    pl.onOre = (type, n, pos) => { progress.add(type, n); progress.mined[type]++; sfx.crumble(); sfx.pickup(); toast(`+${n} ${type}`, pos); };
+    pl.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); progress.treesFelled++; sfx.pickup(); toast(`+${k} wood`, pos); first('firstWood'); if (progress.treesFelled % 6 === 0) chat('chop', 40, true); if (progress.items.wood >= 50) first('milestoneWood'); };
+    pl.onStone = (n, pos) => { const k = n + (progress.has('ironpick') ? 2 : progress.has('pickaxe') ? 1 : 0); progress.add('stone', k); progress.bouldersBroken++; sfx.crumble(); toast(`+${k} stone`, pos); first('firstStone'); if (progress.bouldersBroken % 5 === 0) chat('rock', 40, true); };
+    pl.onCrystal = (n, pos) => { progress.add('crystal', n); sfx.crumble(); sfx.pickup(); toast(`+${n} crystal`, pos); first('firstCrystal'); };
+    pl.onOre = (type, n, pos) => { progress.add(type, n); progress.mined[type]++; sfx.crumble(); sfx.pickup(); toast(`+${n} ${type}`, pos); first('firstOre'); const ok = 'ore' + type.charAt(0).toUpperCase() + type.slice(1); if (D[ok]) first(ok); };
     pl.onPodDestroyed = pos => { progress.podDestroyed = true; progress.podHits = POD_HITS; progress.add('steel', POD_STEEL); sfx.crumble(); toast(`+${POD_STEEL} steel`, pos); say('podSmashed'); };
     pl.onLoot = (_i: number, loot: Loot, pos: THREE.Vector3) => {
       const parts: string[] = [];
       for (const [k, n] of Object.entries(loot) as [keyof Loot, number][]) { if (!n) continue; progress.items[k] += n; parts.push(`${n} ${k}`); }
       progress.lootOpened++; sfx.crumble(); sfx.pickup(); toast(`Loot: ${parts.join(', ')}`, pos);
-      say('loot');
-      if (loot.artifact) { say('artifact'); if (progress.items.artifact >= 3) say('artifact3'); }
+      say('loot'); chat(loot.core && loot.artifact ? 'lootRare' : 'loot', 45, true);
+      if (loot.artifact) { say('artifact'); if (progress.items.artifact >= 3) say('artifact3'); const n = progress.items.artifact; if (D['artifact' + n]) first('artifact' + n); }
     };
   };
 
   const buildHubUi = (built: { mesh: HubMesh; group: THREE.Group }) => {
     const bench = new RecipePanel('CRAFTING BENCH', RECIPES.filter(r => r.where === 'bench'), progress, id => craft(id), 'Unlock more by exploring', 1.15, 6);
-    const computer = new ComputerScreen(() => { progress.gamePlayed = true; });
+    const computer = new ComputerScreen(() => { progress.gamePlayed = true; first('arcade'); });
     bench.mesh.position.copy(built.mesh.benchScreenAt);
     computer.mesh.position.copy(built.mesh.computerScreenAt);
     built.group.add(bench.mesh, computer.mesh);
@@ -328,7 +334,7 @@ async function boot() {
     progress.reset(); placing = null;
     if (ghost) { scene.remove(ghost.group); ghost = null; }
     ghostPose = null; hubUi = null;
-    health.reset(); overlay.setTint(0, 0); factory.reset(); factoryView = null; buildSystem = null; setBuild(false); narrator.clearTold(); machinePanel.show(null); linkMode = false; linkFrom = null; selectedMachine = null; hoveredMachine = null;
+    health.reset(); overlay.setTint(0, 0); factory.reset(); factoryView = null; buildSystem = null; setBuild(false); narrator.clearTold(); lastPhase = 'day'; knownSites = 0; hubSeen = false; idleT = 120; machinePanel.show(null); linkMode = false; linkFrom = null; selectedMachine = null; hoveredMachine = null;
     for (const t of toasts) scene.remove(t.sprite);
     toasts.length = 0;
     floating = null; map.mesh.visible = craftPanel.mesh.visible = false; map.showOre = false;
@@ -353,7 +359,7 @@ async function boot() {
     currentSlot = slot; appMode = 'game'; menuRoom.group.visible = false; autosave = 0;
     playSeconds = d ? d.playSeconds : 0;
     if (d && d.phase === 'planet' && d.planet) startPlanet(d);
-    else { ship.visible = true; player.teleport(SPAWN); story.reset(); if (!d) saveGame(); }
+    else { ship.visible = true; player.teleport(SPAWN); story.reset(); chat('capsuleStart', 0); if (!d) saveGame(); }
   };
 
   const togglePause = (open?: boolean) => {
@@ -366,10 +372,10 @@ async function boot() {
   // ---- Story: Play -> alarm -> crash -> title -> planet ----
   const story = new Story({
     onAlarm: () => {
-      sfx.ensure(); sfx.startAlarm();
+      sfx.ensure(); sfx.startAlarm(); chat('podAlarm', 0);
       menu.showMessage(['THRUSTERS FAILED', 'DEPLOYING EMERGENCY', 'BRAKES']);
     },
-    onCrash: () => { sfx.stopAlarm(); sfx.crash(); },
+    onCrash: () => { sfx.stopAlarm(); sfx.crash(); chat('podCrash', 0); },
     onLand: () => startPlanet(null),
     onSkip: () => { sfx.stopAlarm(); sfx.duck(); },   // B in the capsule: straight to the title
   });
@@ -528,7 +534,7 @@ async function boot() {
     const piece = buildSystem.add({ type: mode, cx: buildPlan.cx, cz: buildPlan.cz, level: buildPlan.level, edge: buildPlan.edge, axis: buildPlan.axis, color: PALETTE[buildPanel.color] });
     if (!piece) { sfx.fail(); return; }
     progress.spend(cost); progress.piecesBuilt++;
-    const g = pieceGeometry(piece); sfx.thump(g.center); say('build');
+    const g = pieceGeometry(piece); sfx.thump(g.center); say('build'); first(mode === 'foundation' ? 'foundation' : mode === 'wall' ? 'wall' : 'catwalk'); if (progress.piecesBuilt % 8 === 0) chat('buildMore', 60, true);
   };
 
   /** Conveyor Link tool: first click picks the source, second the target. */
@@ -554,10 +560,10 @@ async function boot() {
     const at = new THREE.Vector3(mc.x, mc.y + 2.5, mc.z);
     if (action === 'reset') { factory.resetBreaker(); sfx.craft(); toast('Breaker reset', at); return; }
     if (action === 'filter') { factory.cycleFilter(id, arg ?? 0); sfx.pickup(); return; }
-    if (action === 'tokens') { const n = factory.takeTokens(); progress.items.token += n; sfx.pickup(); toast(n ? `+${n} tokens` : 'No tokens yet', at); if (n) say('sink'); return; }
+    if (action === 'tokens') { const n = factory.takeTokens(); progress.items.token += n; sfx.pickup(); toast(n ? `+${n} tokens` : 'No tokens yet', at); if (n) { say('sink'); first('firstTokens'); } return; }
     if (action === 'overclock') {
       if (!progress.has('overclockst') || progress.items.core < 1) { sfx.fail(); toast('Needs the Overclock Station and a core', at); return; }
-      if (factory.overclock(id)) { progress.items.core -= 1; sfx.craft(); toast(`Clock ${Math.round(mc.clock * 100)}%`, at); say('overclock'); } else sfx.fail();
+      if (factory.overclock(id)) { progress.items.core -= 1; sfx.craft(); toast(`Clock ${Math.round(mc.clock * 100)}%`, at); say('overclock'); chat('overclockMore', 30, true); } else sfx.fail();
       return;
     }
     if (action === 'fuel') {
@@ -675,11 +681,13 @@ async function boot() {
     if (planet && appMode === 'game' && !pauseOpen && story.phase === 'planet') {
       const e = planet.hazardAt(headNow.x, headNow.z);
       const fd = fallDamage(landed, gear);
-      if (fd > 1) { health.hurt(fd); sfx.hurt(); toast(`Hard landing: -${Math.round(fd)} HP`, headNow.clone().add(new THREE.Vector3(0, 0.5, 0))); }
+      if (fd > 1) { health.hurt(fd); sfx.hurt(); chat('fall', 45, true); toast(`Hard landing: -${Math.round(fd)} HP`, headNow.clone().add(new THREE.Vector3(0, 0.5, 0))); }
+      if (health.hp < 30 && health.hp > 0) chat('lowHp', 60, true);
+      if (headNow.y < WATER_Y + 1.2 && heightAt(headNow.x, headNow.z) < WATER_Y) chat('water', 120, true);
       const dps = damagePerSecond(e, gear);
       if (health.update(simDt, dps)) {
         const hubP = planet.hub?.pose;
-        player.teleport(hubP ? toWorld([0, 0.95, 0], hubP) : new THREE.Vector3(0, 3, 0)); health.reset(); say('died'); sfx.fail();
+        player.teleport(hubP ? toWorld([0, 0.95, 0], hubP) : new THREE.Vector3(0, 3, 0)); health.reset(); say('died'); chat('deaths', 5); sfx.fail();
       }
       if (dps > 0 && Math.random() < dt * 2.2) sfx.hurt();
       if (e.radiation && Math.random() < dt * (gear.hazmat ? 5 : 20)) sfx.geiger();
@@ -776,7 +784,9 @@ async function boot() {
       factoryView.focus.copy(headW);
       factory.update(simDt, planet.daylight);
       factoryView.update(simDt, factory);
-      if (factory.tripped && !wasTripped) { say('trip'); sfx.fail(); }
+      if (factory.tripped && !wasTripped) { say('trip'); chat('trip', 20); sfx.fail(); }
+      if (factory.machines.length >= 10) first('milestoneMachines');
+      if (progress.platesCollected >= 50) first('milestonePlates');
       wasTripped = factory.tripped;
     } else if (machinePanel.mesh.visible) machinePanel.show(null);
 
@@ -875,6 +885,20 @@ async function boot() {
       } else ghostPose = null;
     }
 
+    if (appMode === 'game' && planet && story.phase === 'planet' && !pauseOpen) {
+      const dl = planet.daylight, ph = dl > 0.55 ? 'day' : dl < 0.2 ? 'night' : lastPhase;
+      if (ph !== lastPhase) { if (ph === 'night') chat('nightfall', 60); else if (ph === 'day') chat('sunrise', 60); lastPhase = ph; }
+      else if (dl < 0.55 && dl > 0.2 && lastPhase === 'day') chat('sunset', 120, true);
+      if (planet.siteMarks.length > knownSites) chat('podFound', 30, true);
+      knownSites = planet.siteMarks.length;
+      if (planet.hub && !hubSeen && Math.hypot(planet.hub.pose.x - headNow.x, planet.hub.pose.z - headNow.z) < 6) { hubSeen = true; first('hubEnter'); }
+      if ((idleT -= dt) < 0) {
+        idleT = 100 + Math.random() * 120;
+        const night = dl < 0.3;
+        const pool = night && Math.random() < 0.4 ? 'alienNight' : factory.machines.length > 2 && Math.random() < 0.5 ? 'idleFactory' : progress.piecesBuilt > 4 && Math.random() < 0.3 ? 'idleBuilder' : night ? 'idleNight' : 'idleDay';
+        chat(pool, 0, true);
+      }
+    }
     narrator.update(dt);
 
     // Wrist displays and the desktop text overlay

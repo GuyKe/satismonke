@@ -166,3 +166,6 @@ NOT verified: anything on a real headset or under IWER. That includes controller
 2. Snap/smooth turning on the thumbstick (the rig has no rotation yet; physics assumes rig yaw 0, so turning must rotate the local vectors fed to `update`).
 3. Comfort vignette option; surface slipperiness (grip per collider).
 4. M3: window with stars/planet at the front, more props. M4: map/clock/decorative screens. M6: time trial and banana collecting. M7: deploy to GitHub Pages.
+
+## Dialogue
+`src/ui/dialogue.ts` holds the `D` library (VESPER + alien variants per event key). `Narrator.sometimes(key, variants, cooldown, low)` picks a random variant (never repeating), rate-limits per key, and drops low-priority chatter while busy. Triggers live in `src/main.ts` via `chat()` / `first()`: crafting (`craft_<id>`), gathering, loot/artifacts, factory, building, health, day/night, hub, map, arcade, milestones and an idle chatter timer. `narrator.log` records spoken lines for tests.

@@ -14,6 +14,11 @@ export class Narrator {
   private current: Line | null = null;
   private t = 0;
   private told = new Set<string>();
+  private lastSaid = new Map<string, number>();
+  private lastVariant = new Map<string, number>();
+  private now = 0;
+  /** The last lines spoken (for tests and debugging). */
+  readonly log: string[] = [];
 
   constructor(camera: THREE.Object3D, private volume: () => number) {
     this.panel = new Screen(1.6, 0.3, 1024, 192);
@@ -30,7 +35,25 @@ export class Narrator {
     this.queue.push(...lines);
   }
 
-  clearTold(): void { this.told.clear(); this.queue = []; this.current = null; this.panel.mesh.visible = false; }
+  /**
+   * Say one of several variants for `key`, at most once per `cooldown` seconds (never the same variant twice running).
+   * Low-priority lines are dropped when the narrator is already busy.
+   */
+  sometimes(key: string, variants: Line[][], cooldown = 60, low = false): boolean {
+    if (!variants.length) return false;
+    if (this.now - (this.lastSaid.get(key) ?? -1e9) < cooldown) return false;
+    if (low && (this.current || this.queue.length > 1)) return false;
+    this.lastSaid.set(key, this.now);
+    let i = Math.floor(Math.random() * variants.length);
+    if (variants.length > 1 && i === this.lastVariant.get(key)) i = (i + 1) % variants.length;
+    this.lastVariant.set(key, i);
+    this.queue.push(...variants[i]);
+    return true;
+  }
+
+  get busy(): boolean { return !!this.current || this.queue.length > 0; }
+
+  clearTold(): void { this.told.clear(); this.lastSaid.clear(); this.lastVariant.clear(); this.log.length = 0; this.queue = []; this.current = null; this.panel.mesh.visible = false; }
   toldKeys(): string[] { return [...this.told]; }
   loadTold(keys: string[]): void { this.told = new Set(keys); }
 
@@ -62,10 +85,12 @@ export class Narrator {
   }
 
   update(dt: number): void {
+    this.now += dt;
     if (!this.current) {
       const next = this.queue.shift();
       if (!next) { this.panel.mesh.visible = false; return; }
       this.current = next; this.t = 0; this.panel.mesh.visible = true; this.speak(next);
+      this.log.push(`${next.who}: ${next.text}`); if (this.log.length > 40) this.log.shift();
     }
     this.t += dt;
     const dur = 2.5 + this.current.text.length * 0.055;
