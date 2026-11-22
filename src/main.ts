@@ -9,6 +9,9 @@ import { BuildSystem, Plan, Piece, PieceType, PALETTE, COST as BUILD_COST, COLOR
 import { BuildPanel } from './ui/BuildPanel';
 import { Narrator, LINES, Line } from './ui/Narrator';
 import { D } from './ui/dialogue';
+import { Net } from './net/Multiplayer';
+import { RemotePlayers } from './world/RemotePlayers';
+import { PlayerModel } from './world/PlayerModel';
 import { Health, Gear, damagePerSecond, fallDamage } from './game/Hazards';
 import { toWorld } from './world/Hub';
 import { Factory, MachineKind, ITEM_NAME } from './game/Factory';
@@ -317,6 +320,7 @@ async function boot() {
   };
 
   const saveGame = (): boolean => {
+    if (currentSlot < 0) return false; // lobby games are not saved
     const onPlanet = !!planet && (story.phase === 'planet' || story.phase === 'landing');
     const d: SaveData = {
       version: 2, savedAt: Date.now(), playSeconds: Math.round(playSeconds),
@@ -346,11 +350,39 @@ async function boot() {
   };
 
   const enterMainMenu = (save: boolean) => {
-    if (save && appMode === 'game') saveGame();
+    if (save && appMode === 'game' && currentSlot >= 0) saveGame();
+    leaveLobby();
     resetGame();
     appMode = 'menu'; ship.visible = false; menuRoom.group.visible = true;
     player.world = menuRoom.world; player.teleport(MENU_SPAWN);
     mainPanel.open();
+  };
+
+  // ---- Multiplayer: lobbies over WebRTC, then everyone lands on the same planet ----
+  const net = new Net();
+  const remotes = new RemotePlayers();
+  scene.add(remotes.group);
+  const lobbyInfo = () => net.state === 'off' ? null : {
+    code: net.code, isHost: net.isHost, status: net.state, error: net.error,
+    players: net.list.map(p => ({ name: p.name + (p.id === net.me.id ? ' (you)' : ''), color: p.color })),
+  };
+  const refreshLobby = () => { const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); remotes.setPlayers(net.list, net.me.id); };
+  net.onChange = refreshLobby;
+  net.onPose = (id, p) => remotes.pose(id, p);
+  net.onLeave = id => remotes.remove(id);
+  net.onClock = c => { if (planet && Math.abs(planet.clock - c) > 1.5) planet.clock = c; };
+  net.getClock = () => planet?.clock ?? 40;
+  net.onStart = clock => { if (appMode !== 'game' || currentSlot >= 0) beginMultiplayer(clock); };
+  const leaveLobby = () => { net.leave(); remotes.clear(); const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); };
+  const beginMultiplayer = (clock: number) => {
+    resetGame();
+    currentSlot = -1; appMode = 'game'; menuRoom.group.visible = false; autosave = 0; playSeconds = 0;
+    startPlanet(null); story.phase = 'planet';
+    if (planet) planet.clock = clock;
+    // spread friends out a little so nobody lands inside anyone else
+    const idx = Math.max(0, net.list.findIndex(p => p.id === net.me.id));
+    player.teleport(new THREE.Vector3(Math.cos(idx * 1.3) * idx * 2.5, 0.1, Math.sin(idx * 1.3) * idx * 2.5));
+    refreshLobby();
   };
 
   const beginGame = (slot: number, mode: 'new' | 'load') => {
@@ -389,7 +421,7 @@ async function boot() {
     onStart: (slot, mode) => beginGame(slot, mode),
     onDelete: slot => deleteSlot(slot),
     onResume: () => togglePause(false),
-    onSave: () => pausePanel.flash(saveGame() ? 'Game saved' : 'Could not save'),
+    onSave: () => pausePanel.flash(currentSlot < 0 ? 'Lobby games are not saved' : saveGame() ? 'Game saved' : 'Could not save'),
     onMainMenu: () => enterMainMenu(true),
     onSettings: () => {
       saveSettings(settings); sfx.setVolume(settings.volume);
@@ -397,6 +429,10 @@ async function boot() {
       renderer.setSize(innerWidth, innerHeight);
     },
     onResetArms: () => { settings.armSpan = 0; saveSettings(settings); },
+    onHost: () => net.host(),
+    onJoin: code => net.join(code),
+    onLeaveLobby: () => leaveLobby(),
+    onStartLobby: () => net.start(),
   };
   const mainPanel = new MenuPanel('main', handlers, settings, 2.0);
   mainPanel.mesh.position.set(0, 1.05, -1.7);
@@ -422,14 +458,9 @@ async function boot() {
   const lasers = rays.map(r => new LaserPointer(r));
   const hoverTarget: (Interactive | null)[] = [null, null];
   hoverTarget[99] = null;
-  const handMeshes = [0, 1].map(() => {
-    const m = new THREE.Mesh(
-      new THREE.SphereGeometry(player.handRadius, 20, 14),
-      new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.9 }),
-    );
-    scene.add(m); // world space: shows the resolved hand, not the raw controller
-    return m;
-  });
+  // You see your own pioneer: body, arms and fists (no head, it is where your eyes are).
+  const selfModel = new PlayerModel(net.me.color, { head: false });
+  scene.add(selfModel.group);
   const buzz = (i: number, strength: number, ms: number) => {
     const gp = inputs[i]?.gamepad as (Gamepad & { hapticActuators?: { pulse(v: number, d: number): void }[] }) | undefined;
     try { gp?.hapticActuators?.[0]?.pulse(strength, ms); } catch { /* no haptics */ }
@@ -455,12 +486,6 @@ async function boot() {
   });
 
   const arms = new ArmCalibration(settings);
-  const torso = new THREE.Mesh(
-    new THREE.SphereGeometry(0.22, 20, 14).scale(1, 1.35, 0.9),
-    new THREE.MeshStandardMaterial({ color: 0x4a3322, roughness: 0.95 }),
-  );
-  scene.add(torso);
-
   // Buttons (Quest Touch): right A = buttons[4], right B = buttons[5], left X = buttons[4], grip = buttons[1]
   const btn = (i: number, b: number) => !!inputs[i]?.gamepad?.buttons[b]?.pressed;
   const handBtn = (hand: 'left' | 'right', b: number) => [0, 1].some(i => inputs[i]?.handedness === hand && btn(i, b));
@@ -659,12 +684,13 @@ async function boot() {
       player.update(simDt, headStand, [null, null]);
     }
     rig.position.copy(player.position);
-    torso.visible = inXR;
-    torso.position.set(player.position.x + camera.position.x, player.position.y + camera.position.y - 0.45, player.position.z + camera.position.z);
 
+    selfModel.visible = inXR;
+    if (inXR) {
+      const hq = camera.getWorldQuaternion(new THREE.Quaternion()), he = new THREE.Euler().setFromQuaternion(hq, 'YXZ');
+      selfModel.setPose(new THREE.Vector3().copy(player.position).add(camera.position), he.y, he.x, he.z, player.hands[0].world, player.hands[1].world, dt);
+    }
     player.hands.forEach((h, i) => {
-      handMeshes[i].visible = inXR && inputs[i] !== null;
-      handMeshes[i].position.copy(h.world);
       if (h.touching && !hadTouch[i]) buzz(i, 0.35, 25);
       hadTouch[i] = h.touching;
     });
@@ -899,6 +925,15 @@ async function boot() {
         chat(pool, 0, true);
       }
     }
+    if (appMode === 'game' && net.state === 'game') {
+      net.tick(dt, () => {
+        const q = camera.getWorldQuaternion(new THREE.Quaternion());
+        const hw = (i: number) => player.hands[i].world;
+        const r = (v: number) => Math.round(v * 1000) / 1000;
+        return [r(headW.x), r(headW.y), r(headW.z), r(q.x), r(q.y), r(q.z), r(q.w), r(hw(0).x), r(hw(0).y), r(hw(0).z), r(hw(1).x), r(hw(1).y), r(hw(1).z)];
+      });
+      remotes.update(dt);
+    }
     narrator.update(dt);
 
     // Wrist displays and the desktop text overlay
@@ -922,7 +957,7 @@ async function boot() {
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    health, narrator, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    health, narrator, net, remotes, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
     get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },
