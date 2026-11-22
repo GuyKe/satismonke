@@ -178,4 +178,4 @@ NOT verified: anything on a real headset or under IWER. That includes controller
 - Test locally without the public broker: run a PeerServer on 127.0.0.1:9000 and open the game with `?peerhost=127.0.0.1&peerport=9000`; `tests/multiplayer.mjs` drives two browsers.
 
 ## Player model
-`src/world/PlayerModel.ts` is the original "Monke Pioneer" (fur colour, muzzle, ears, headband + antenna, chest patch, thruster backpack, stretchy arms with knuckle fists), built from primitives. Friends use it in lobbies (`RemotePlayers`) and you see your own body, arms and fists in VR. Your fur colour is picked once and stored in localStorage (`satismonke.fur`).
+`src/world/PlayerModel.ts` is the original "Monke Pioneer" in an astronaut suit (furry face in a glass helmet with antenna, white suit with chest panel and accent stripe in your colour, life-support pack with thruster, stretchy arms with gloved fists), built from primitives. Friends use it in lobbies (`RemotePlayers`) and you see your own body, arms and fists in VR. Your fur colour is picked once and stored in localStorage (`satismonke.fur`).
