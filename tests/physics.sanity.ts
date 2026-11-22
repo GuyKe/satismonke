@@ -3,6 +3,7 @@ import { CollisionWorld } from '../src/physics/CollisionWorld';
 import { GorillaPlayer } from '../src/player/GorillaPlayer';
 import { heightAt } from '../src/world/Terrain';
 import { Progress, RECIPES } from '../src/game/Progress';
+import { Factory } from '../src/game/Factory';
 import { ArmCalibration, REF_SPAN } from '../src/player/ArmCalibration';
 
 let failed = 0;
@@ -149,8 +150,8 @@ function swipe(slip: number): number {
 // 10. More recipes
 {
   const pr = new Progress();
-  check('fourteen recipes, three in the X menu', RECIPES.length === 14 && RECIPES.filter(r => r.where === 'x').length === 3);
-  check('campfire and lamp are repeatable', RECIPES.filter(r => r.repeatable).map(r => r.id).join() === 'campfire,lamp');
+  check('21 recipes, three in the X menu', RECIPES.length === 21 && RECIPES.filter(r => r.where === 'x').length === 3);
+  check('placeables are repeatable', RECIPES.filter(r => r.repeatable).map(r => r.id).join() === 'campfire,lamp,burner,miner,smelter,constructor,storage,conveyor,solar');
   check('float core locked until 4 crystals', !pr.recipe('floatcore').unlocked(pr) && (pr.add('crystal', 4), pr.recipe('floatcore').unlocked(pr)));
   check('crystal gloves need power gloves first', !pr.recipe('crystalgloves').unlocked(pr) && (pr.crafted.add('gloves'), pr.add('crystal', 4), pr.recipe('crystalgloves').unlocked(pr)));
 }
@@ -165,9 +166,47 @@ function swipe(slip: number): number {
   b.reset();
   check('reset gives a fresh game', b.items.wood === 0 && !b.has('axe') && !b.podDestroyed && b.oresMined === 0);
   const c = new Progress(); c.podDestroyed = true; c.crafted.add('hub'); c.hubPlaced = true; c.benchOpened = true;
+  c.made = { burner: 1, miner: 1, smelter: 1, constructor: 1, storage: 1 }; c.fueled = true; c.links = 2; c.platesCollected = 6;
   ['axe'].forEach(i => c.crafted.add(i)); c.gamePlayed = true; ['lantern', 'gloves', 'floatcore'].forEach(i => c.crafted.add(i)); c.made.campfire = 1;
   check('objectives continue into the ore chain', c.objective()[0] === 'Find some ore');
   c.mined.iron = 4; check('iron pickaxe unlocks after 4 iron', c.objective()[0] === 'Craft the Iron Pickaxe');
+}
+
+// 12. Factory simulation
+{
+  const build = () => {
+    const f = new Factory();
+    const burner = f.addMachine('burner', 0, 0, 0); burner.fuel = 20;
+    const miner = f.addMachine('miner', 5, 0, 0, 0, { index: 0, type: 'iron' });
+    const smelter = f.addMachine('smelter', 15, 0, 0);
+    const cons = f.addMachine('constructor', 25, 0, 0);
+    const box = f.addMachine('storage', 35, 0, 0);
+    for (const [a, b] of [[miner, smelter], [smelter, cons], [cons, box]]) { const l = f.link(a.id, b.id, 10); if (typeof l === 'string') throw new Error(l); }
+    return { f, burner, miner, smelter, cons, box };
+  };
+  const run = (f: Factory, s: number, day = 1) => { for (let i = 0; i < s * 20; i++) f.update(0.05, day); };
+  const A = build(); run(A.f, 120);
+  const plates = A.box.stored.plate ?? 0;
+  check('iron flows miner -> smelter -> constructor -> storage', plates >= 45 && plates <= 58, `${plates} plates in 120 s (about 30/min after warm-up)`);
+  check('a powered miner reports about 30 ore/min', Math.abs(A.f.perMin(A.miner) - 30) < 6, `${A.f.perMin(A.miner).toFixed(0)}/min`);
+  const B = build(); B.burner.fuel = 0; run(B.f, 60);
+  check('no power, no production', (B.box.stored.plate ?? 0) === 0 && B.miner.status === 'No power' && B.f.power.ratio === 0);
+  const C = build(); C.burner.fuel = 0; C.f.addMachine('solar', 0, 0, 5); run(C.f, 120, 1);
+  const half = (C.box.stored.plate ?? 0);
+  const D = build(); D.burner.fuel = 0; D.f.addMachine('solar', 0, 0, 5); run(D.f, 120, 0);
+  check('solar power works by day and not at night', half > 5 && (D.box.stored.plate ?? 0) === 0, `day ${half} plates, night ${D.box.stored.plate ?? 0}`);
+  const E = build(); for (let k = 0; k < 2; k++) { const extra = E.f.addMachine('miner', 7, 0, 3 + k, 0, { index: 1 + k, type: 'copper' }); E.f.link(extra.id, E.box.id, 20); }
+  run(E.f, 60);
+  check('extra machines overload one burner and everything slows down', E.f.power.ratio < 1 && E.f.power.demand > E.f.power.supply, `demand ${E.f.power.demand.toFixed(1)} MW vs supply ${E.f.power.supply.toFixed(1)} MW`);
+  const F = new Factory(); const fb = F.addMachine('burner', 0, 0, 0); fb.fuel = 5;
+  const fm = F.addMachine('miner', 1, 0, 0, 0, { index: 0, type: 'iron' }); const fc = F.addMachine('constructor', 5, 0, 0);
+  F.link(fm.id, fc.id, 8); run(F, 120);
+  check('ore on a belt into a constructor jams (wrong item = bottleneck)', fm.status === 'Output blocked' && (fc.input.ironIngot ?? 0) === 0 && (F.links[0].items.length > 0));
+  check('links are refused when the ends make no sense', typeof A.f.link(A.box.id, A.miner.id, 5) === 'string' && typeof A.f.link(A.miner.id, A.smelter.id, 5) === 'string');
+  const G = new Factory(); G.load(JSON.parse(JSON.stringify(A.f.toJSON())));
+  check('factory state survives save/load', G.machines.length === 5 && G.links.length === 3 && (G.get(A.box.id)!.stored.plate ?? 0) === plates);
+  const H = build(); const split = H.f.addMachine('smelter', 15, 0, 8); H.f.link(H.miner.id, split.id, 12); run(H.f, 100);
+  check('a miner with two belts splits its output', (H.smelter.status !== 'Waiting for input') && (split.input.ironOre ?? 0) + (split.job ? 1 : 0) + (split.output.ironIngot ?? 0) > 0);
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');

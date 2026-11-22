@@ -36,6 +36,31 @@ Quest Touch mapping (UNTESTED on hardware): right controller A = `gamepad.button
 - Chop: hold grip and punch a tree at >= 2.2 m/s (`hand.impact` from `GorillaPlayer`). `CollisionWorld` colliders carry an `owner` id (the tree index); `ownerAt(contact)` identifies it and `removeOwner` makes it non-solid. `Planet.fellTree` swaps the instanced tree for a temporary mesh that tips away from you over 1 s, lies there, and after 3 s total disappears and calls `onWood` (2-5 wood by height, +1 for pines). Wood count is shown on the left wrist (`ui/WoodHud.ts`) plus a floating "+N wood" toast; there is no use for wood yet (crafting is a natural next step). Sounds: chop, thump, pickup in `Sfx`.
 - Creatures look away: each creature alternates 4-10 s watching you with 3-8 s looking elsewhere (`look.away`). Curious, defensive and friendly ones also lose interest while looking away and go back to wandering; shy and skittish ones still keep their distance.
 
+## Factory automation (phase 1 of the factory-game vision)
+Pillars of the design brief and where each stands:
+| Pillar | Status |
+|---|---|
+| Hand mining -> automation | Done (phase 1): mine by hand, then Miners, Smelters, Constructors |
+| Belts, splitters, mergers, bottlenecks | Done in simplified form: point-to-point belts; several outgoing belts split, several incoming merge; 60 items/min per belt; wrong item types jam a line |
+| Power grid | Partly: Biomass Burner (hand-fed wood) and Solar Panel (daylight only), one global grid that slows every machine when demand exceeds supply. No wires/poles, coal, fuel, nuclear yet |
+| 3D building (foundations, walls, catwalks, glass roofs) | Not started (only the prefab Hub) |
+| Fluids (water, oil, gas, pipes, pressure) | Not started |
+| Long-distance transport (trucks, trains, drones, depots) | Not started (belts already run any distance over terrain) |
+| Hand-made world, hidden caves, cliffs, distinct biomes | Not started (terrain is procedural: plains, lakes, rivers, ridges, buttes) |
+| Exploration rewards (overclock items, hard drives from drop pods -> alternate recipes) | Not started |
+| Co-op multiplayer | Not started (needs a server; big) |
+| Jetpack, hypertubes, combat gear, wildlife that fights back | Not started (creatures are harmless) |
+| AI companion with dark corporate humour | Not started. Use an ORIGINAL name, voice and company; do not copy existing characters or names |
+Suggested order: (2) 3D building pieces, (3) explicit splitter/mergers + power poles/wires + more generators, (4) fluids, (5) exploration rewards and alternate recipes, (6) transport, (7) companion voice lines, (8) co-op.
+
+How it works now:
+- `game/Factory.ts` is the pure simulation (testable in node). Machines: miner, smelter, constructor, storage, burner, solar. Links join a machine's output to another machine's input. Rates: 30 items/min per machine at full power (`CYCLE` = 2 s); power use miner 0.3, smelter 0.3, constructor 0.4 MW; burner makes 1 MW and burns 1 wood per 20 s only while something draws power; solar makes up to 0.6 MW in daylight (`Planet.daylight`). `perMin()` is the measured rate. Save/load via `toJSON/load` (items in transit are not saved).
+- `world/FactoryView.ts` draws machines (low-poly models, status lights: green running, amber waiting/blocked/low power, red no power/fuel), scrolling-chevron belts that follow the terrain, and instanced item cubes riding them. `pick(ray)` finds the machine you are aiming at.
+- `ui/MachinePanel.ts`: aim the laser (or mouse) at a machine to see its status card (state, items/min, buffers, grid load) with buttons: +5 WOOD (burner), TAKE ALL (storage: ores and ingots become iron/copper in your inventory, plates and wire are kept as new resources), REMOVE (half the cost back).
+- Building: bench recipes Biomass Burner, Miner (must sit on a free iron/copper ore rock: the ghost snaps to it; the rock can no longer be hand-mined), Smelter, Constructor, Storage Box, Solar Panel (unlock: collect 6 plates) place like campfires (aim + trigger, B cancels and refunds). Conveyor Link is a tool: craft it to toggle link mode, aim at a source machine + trigger, then the target + trigger; the belt costs 1 iron per 5 m. B leaves link mode. New resources: plate (iron ingot -> plate) and wire (copper ingot -> 2 wire). Machines have collision (`MACHINE_OWNER`); punching them does nothing.
+- Objectives now run: burner -> fuel it -> miner on ore -> smelter -> belt -> constructor -> belt -> storage box -> collect 6 plates -> ore chain.
+- Tests: `tests/physics.sanity.ts` section 12 covers flow, rates, power loss, solar day/night, overload, jams, invalid links, save/load and splitting.
+
 ## Bigger world, more water, more creatures, settings
 - World: playable radius `WORLD_R` = 440 m (Planet.ts); trees, boulders, ores, crystals, mushrooms and creatures are spread across it (counts scale with graphics quality, see `QUALITY`). Grass now follows you (`regrowGrass`, hash-placed per 4 m cell so it does not shimmer; rebuilt every ~35 m of travel).
 - Terrain (`Terrain.ts`): `WATER_Y` is now -4. `LAKES` (6, the big one still ahead of the landing site), 12 `PONDS`, 3 winding `RIVERS` (centre line x(z), carved into the heightfield) and ridged foothills that rise toward the edge (`ridge()`, grows beyond 200 m). 12 flat-topped land buttes (`buildMesas`, climbable). The terrain mesh is now fine (even rings out to 520 m, then wide rings); `buildTerrainMesh(map, quality)`.

@@ -1,4 +1,5 @@
 import type { ProgressData } from './Progress';
+import type { FactoryState } from './Factory';
 
 export const SLOTS = 3;
 const key = (i: number) => `satismonke.save.${i}`;
@@ -12,6 +13,8 @@ export interface PlanetState {
   podAlive: boolean; podHead: [number, number, number]; podForward: [number, number, number];
   hub: { x: number; y: number; z: number; yaw: number } | null;
   props: { kind: 'campfire' | 'lamp'; x: number; z: number }[];
+  /** Machines and belts (optional: older saves have none). */
+  factory?: FactoryState;
 }
 
 export interface SaveData {

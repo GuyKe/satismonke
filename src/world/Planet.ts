@@ -22,6 +22,7 @@ export const POD_OWNER = 100000;
 export const BOULDER_OWNER = 200000;
 export const CRYSTAL_OWNER = 300000;
 export const ORE_OWNER = 400000;
+export const MACHINE_OWNER = 500000;
 
 /** Ore deposits: colour, punches to break by hand, and how much they give. */
 export const ORE_DEF: Record<Ore, { color: number; rock: number; hits: number; yield: [number, number]; glow: number }> = {
@@ -126,6 +127,8 @@ export class Planet {
   /** A felled tree hit the ground. */
   onTreeLanded: ((pos: THREE.Vector3) => void) | null = null;
   private oreRecs: OreRec[] = [];
+  private oreOccupied = new Set<number>();
+  private dayF = 1;
   private oreMeshes = {} as Record<Ore, { rock: THREE.InstancedMesh; specks: THREE.InstancedMesh }>;
   private mesaTops: number[] = [];
   /** Where the pod was placed (kept so a save can put it back). */
@@ -494,6 +497,38 @@ export class Planet {
     }
   }
 
+  /** 0..1 how much daylight there is (solar panels). */
+  get daylight(): number { return this.dayF; }
+
+  /** Nearest unmined, unoccupied copper or iron deposit within `maxD` of (x, z): where a Miner can go. */
+  findFreeOre(x: number, z: number, maxD: number): { index: number; type: 'copper' | 'iron'; x: number; y: number; z: number } | null {
+    let best: { index: number; type: 'copper' | 'iron'; x: number; y: number; z: number } | null = null, bd = maxD;
+    this.oreRecs.forEach((o, i) => {
+      if (o.broken || this.oreOccupied.has(i) || (o.type !== 'copper' && o.type !== 'iron')) return;
+      const d = Math.hypot(o.x - x, o.z - z);
+      if (d < bd) { bd = d; best = { index: i, type: o.type, x: o.x, y: o.y + o.r * 0.55, z: o.z }; }
+    });
+    return best;
+  }
+  setOreOccupied(index: number, on: boolean): void { if (on) this.oreOccupied.add(index); else this.oreOccupied.delete(index); }
+
+  /** Is this open, level, dry ground for a machine? */
+  canPlaceMachine(x: number, z: number): { ok: boolean; y: number; reason: string } {
+    const y = heightAt(x, z);
+    if (y < WATER_Y + 0.4) return { ok: false, y, reason: 'Too close to water' };
+    let lo = y, hi = y;
+    for (const [dx, dz] of [[1.2, 0], [-1.2, 0], [0, 1.2], [0, -1.2]]) { const h = heightAt(x + dx, z + dz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+    if (hi - lo > 0.9) return { ok: false, y: hi, reason: 'Ground too steep' };
+    if (this.world.distance(new THREE.Vector3(x, y + 1.7, z)) < 1.3) return { ok: false, y: hi, reason: 'Something is in the way' };
+    return { ok: true, y: hi, reason: '' };
+  }
+
+  addMachineCollider(id: number, x: number, y: number, z: number): void {
+    this.world.addCylinder(x, z, y - 0.3, y + 2.2, 0.95, 0.3, MACHINE_OWNER + id);
+    this.world.finalize();
+  }
+  removeMachineCollider(id: number): void { this.world.removeOwner(MACHINE_OWNER + id); }
+
   /** Unmined ore deposits (for the Ore Scanner on the map). */
   get oreMarks(): { type: Ore; x: number; z: number }[] { return this.oreRecs.filter(o => !o.broken); }
 
@@ -501,6 +536,7 @@ export class Planet {
   hitOre(i: number, tool: 'hand' | 'pick' | 'iron'): number {
     const o = this.oreRecs[i];
     if (!o || o.broken) return 0;
+    if (this.oreOccupied.has(i)) return 1; // a Miner is sitting on it
     const def = ORE_DEF[o.type];
     const needed = tool === 'iron' ? 1 : tool === 'pick' ? Math.max(1, def.hits - 1) : def.hits;
     o.hits++;
@@ -702,7 +738,7 @@ export class Planet {
     this.moon.position.set(-dir.x, -dir.y * 0.9, 0.4).multiplyScalar(SKY_R * 0.9);
     this.moon.visible = this.moon.position.y > -50;
     const night = Math.pow(1 - day, 1.5);
-    this.nightF = night;
+    this.nightF = night; this.dayF = day;
     if (Math.hypot(follow.x - this.grassCenter.x, follow.z - this.grassCenter.y) > 35) this.regrowGrass(follow.x, follow.z);
     (this.stars.material as THREE.PointsMaterial).opacity = night;
 
