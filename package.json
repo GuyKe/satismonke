@@ -1,0 +1,22 @@
+{
+  "name": "satismonke",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "test:physics": "tsx tests/physics.sanity.ts"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "iwer": "^2.8.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }
+}
