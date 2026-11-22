@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CollisionWorld } from '../physics/CollisionWorld';
 import { Animal, makeGround, makeFlyer } from './Animals';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { buildHubMesh, addHubColliders, HUB_RADIUS, HubMesh, HubPose } from './Hub';
 import { heightAt, buildTerrainMesh, pathMask, PONDS, LAKE, pondY, WATER_Y } from './Terrain';
 
 export interface TreeRec {
@@ -9,6 +10,12 @@ export interface TreeRec {
   color: number; trunkIdx: number; foliageIdx: number; felled: boolean;
   trunkLocal: THREE.Matrix4; foliageLocal: THREE.Matrix4;
 }
+
+/** Collider owner ids: trees use their index; these are bases for other things. */
+export const POD_OWNER = 100000;
+export const BOULDER_OWNER = 200000;
+
+interface BoulderRec { x: number; y: number; z: number; r: number; hits: number; broken: boolean; matrix: THREE.Matrix4 }
 
 export const DAY_SECONDS = 7 * 60;
 export const NIGHT_SECONDS = 5 * 60;
@@ -89,6 +96,19 @@ export class Planet {
   onWood: ((amount: number, pos: THREE.Vector3) => void) | null = null;
   /** A felled tree hit the ground. */
   onTreeLanded: ((pos: THREE.Vector3) => void) | null = null;
+  private boulderRecs: BoulderRec[] = [];
+  private boulderMesh!: THREE.InstancedMesh;
+  private debris: { mesh: THREE.Mesh; vel: THREE.Vector3; spin: THREE.Vector3; t: number; life: number }[] = [];
+  private podHull: THREE.Group | null = null;
+  private podAlive = true;
+  private podShake = 0;
+  private podBaseY = 0;
+  private podHits = 0;
+  hub: { pose: HubPose; mesh: HubMesh; group: THREE.Group } | null = null;
+  /** Stone gained from a boulder that just broke. */
+  onStone: ((amount: number, pos: THREE.Vector3) => void) | null = null;
+  /** The crashed pod was destroyed. */
+  onPodDestroyed: ((pos: THREE.Vector3) => void) | null = null;
   private clocks = new Map<Animal, number>();
   private probe = new THREE.Vector3();
   private smoke: THREE.Sprite[] = [];
@@ -266,8 +286,10 @@ export class Planet {
       const p = this.dryPoint(rng, 10, 210), r = 0.9 + Math.pow(rng(), 2) * 4.5;
       m.compose(new THREE.Vector3(p.x, p.h + r * 0.25, p.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rng() * 6, 0)), new THREE.Vector3(r, r * 0.7, r * (0.8 + rng() * 0.4)));
       mesh.setMatrixAt(i, m); mesh.setColorAt(i, col.setHSL(0.74 + rng() * 0.08, 0.12, 0.36 + rng() * 0.2));
-      this.world.addSphere(new THREE.Vector3(p.x, p.h + r * 0.3, p.z), r * 0.78, 0.3);
+      this.world.addSphere(new THREE.Vector3(p.x, p.h + r * 0.3, p.z), r * 0.78, 0.3, BOULDER_OWNER + i);
+      this.boulderRecs.push({ x: p.x, y: p.h, z: p.z, r, hits: 0, broken: false, matrix: m.clone() });
     }
+    this.boulderMesh = mesh;
     this.group.add(mesh);
   }
 
@@ -570,7 +592,7 @@ export class Planet {
   /** Live data for the map. */
   get trees(): readonly TreeRec[] { return this.treeRecs; }
   get creatures(): readonly Animal[] { return this.animals; }
-  get podPosition(): THREE.Vector3 | null { return this.pod ? this.pod.position : null; }
+  get podPosition(): THREE.Vector3 | null { return this.pod && this.podAlive ? this.pod.position : null; }
 
   /**
    * Knock a tree down, away from `from`. It tips over in a second, lies there, and after 3 s
@@ -602,7 +624,95 @@ export class Planet {
     return true;
   }
 
+  // ---------------- stone, pod and hub ----------------
+
+  /** Spawn flying chunks that shrink away. */
+  private burst(pos: THREE.Vector3, n: number, color: number, size: number, speed = 4): void {
+    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: color === 0x8a96aa ? 0.7 : 0, flatShading: true });
+    for (let i = 0; i < n; i++) {
+      const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(size * (0.5 + Math.random() * 0.7), 0), mat);
+      mesh.position.copy(pos);
+      this.group.add(mesh);
+      this.debris.push({ mesh, vel: new THREE.Vector3((Math.random() - 0.5) * speed, 1 + Math.random() * speed, (Math.random() - 0.5) * speed), spin: new THREE.Vector3(Math.random() * 6, Math.random() * 6, 0), t: 0, life: 1.1 + Math.random() * 0.5 });
+    }
+  }
+
+  private updateDebris(dt: number): void {
+    for (let i = this.debris.length - 1; i >= 0; i--) {
+      const d = this.debris[i];
+      d.t += dt; d.vel.y -= 9 * dt;
+      d.mesh.position.addScaledVector(d.vel, dt);
+      const g = heightAt(d.mesh.position.x, d.mesh.position.z);
+      if (d.mesh.position.y < g + 0.05) { d.mesh.position.y = g + 0.05; d.vel.multiplyScalar(0.3); d.vel.y = Math.abs(d.vel.y) * 0.2; }
+      d.mesh.rotation.x += d.spin.x * dt; d.mesh.rotation.y += d.spin.y * dt;
+      d.mesh.scale.setScalar(Math.max(0, 1 - Math.max(0, d.t - d.life * 0.5) / (d.life * 0.5)));
+      if (d.t >= d.life) { this.group.remove(d.mesh); this.debris.splice(i, 1); }
+    }
+  }
+
+  /** Hit a boulder. 3 hits break it into stone. Returns hits left (0 = broke). */
+  hitBoulder(i: number): number {
+    const b = this.boulderRecs[i];
+    if (!b || b.broken) return 0;
+    b.hits++;
+    const at = new THREE.Vector3(b.x, b.y + b.r * 0.5, b.z);
+    if (b.hits < 3) { this.burst(at, 3, 0x9a90a8, 0.15 * b.r, 2.5); return 3 - b.hits; }
+    b.broken = true;
+    this.world.removeOwner(BOULDER_OWNER + i);
+    this.boulderMesh.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); this.boulderMesh.instanceMatrix.needsUpdate = true;
+    this.burst(at, 9, 0x9a90a8, 0.28 * b.r, 5);
+    this.onStone?.(Math.max(2, Math.round(b.r * 1.4)), at);
+    return 0;
+  }
+
+  /** Hit the crashed pod. Returns hits left (0 = destroyed). */
+  hitPod(needed: number): number {
+    if (!this.podAlive || !this.pod) return 0;
+    this.podHits++;
+    this.podShake = 0.3;
+    const at = this.pod.position.clone(); at.y += 0.9;
+    if (this.podHits < needed) { this.burst(at, 3, 0x8a96aa, 0.12, 3); return needed - this.podHits; }
+    this.podAlive = false;
+    this.world.removeOwner(POD_OWNER);
+    if (this.podHull) { this.pod.remove(this.podHull); this.podHull = null; }
+    for (const s of this.smoke) this.pod.remove(s);
+    this.smoke.length = 0;
+    if (this.podLight) { this.pod.remove(this.podLight); this.podLight = null; }
+    this.burst(at, 18, 0x8a96aa, 0.3, 6);
+    this.onPodDestroyed?.(at);
+    return 0;
+  }
+
+  /** Can the Hub go here? Checks water, slope, trees and boulders. Returns the base height too. */
+  canPlaceHub(x: number, z: number, yaw: number): { ok: boolean; y: number; reason: string } {
+    const pose: HubPose = { x, y: 0, z, yaw };
+    let lo = Infinity, hi = -Infinity;
+    for (let lx = -6.2; lx <= 6.2; lx += 2.07) for (let lz = -2.8; lz <= 2.8; lz += 1.4) {
+      const c = Math.cos(yaw), s = Math.sin(yaw);
+      const h = heightAt(x + lx * c + lz * s, z - lx * s + lz * c);
+      lo = Math.min(lo, h); hi = Math.max(hi, h);
+    }
+    if (lo < WATER_Y + 0.6) return { ok: false, y: hi, reason: 'Too close to water' };
+    if (hi - lo > 3.2) return { ok: false, y: hi, reason: 'Ground too steep' };
+    for (const t of this.treeRecs) if (!t.felled && Math.hypot(t.x - x, t.z - z) < HUB_RADIUS + 1.5) return { ok: false, y: hi, reason: 'A tree is in the way' };
+    for (const b of this.boulderRecs) if (!b.broken && Math.hypot(b.x - x, b.z - z) < HUB_RADIUS + b.r) return { ok: false, y: hi, reason: 'A boulder is in the way' };
+    return { ok: true, y: hi, reason: '' };
+  }
+
+  /** Build the Hub for real. */
+  placeHub(x: number, z: number, yaw: number, y: number): { pose: HubPose; mesh: HubMesh; group: THREE.Group } {
+    const pose: HubPose = { x, y, z, yaw };
+    const mesh = buildHubMesh(false);
+    mesh.group.position.set(x, y, z); mesh.group.rotation.y = yaw;
+    const light = new THREE.PointLight(0xcfeaff, 6, 9, 2); light.position.set(0, 2.9, 0); mesh.group.add(light);
+    this.group.add(mesh.group);
+    addHubColliders(this.world, pose);
+    this.hub = { pose, mesh, group: mesh.group };
+    return this.hub;
+  }
+
   private updateFalling(dt: number): void {
+    this.updateDebris(dt);
     for (let i = this.falling.length - 1; i >= 0; i--) {
       const f = this.falling[i];
       f.t += dt;
@@ -641,6 +751,7 @@ export class Planet {
     }
     hullGeo.setAttribute('color', new THREE.Float32BufferAttribute(hc, 3));
     const hull = new THREE.Group(); hull.position.y = 0.6; hull.rotation.x = 0.32; g.add(hull);
+    this.podHull = hull;
     hull.add(new THREE.Mesh(hullGeo, new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.6, roughness: 0.45 })));
     const metal = new THREE.MeshStandardMaterial({ color: 0x6f778c, metalness: 0.7, roughness: 0.4 });
     for (const z of [-0.7, 0, 0.7]) { const t = new THREE.Mesh(new THREE.TorusGeometry(0.86, 0.035, 6, 24), metal); t.position.z = z; hull.add(t); }
@@ -681,15 +792,16 @@ export class Planet {
 
     // solid enough to push off
     const axis = new THREE.Vector3(back.x * Math.cos(0.32), -Math.sin(0.32), back.z * Math.cos(0.32));
-    for (const t of [-0.8, 0, 0.8]) this.world.addSphere(new THREE.Vector3(x, y + 0.6, z).addScaledVector(axis, t), 0.8, 0.3);
+    for (const t of [-0.8, 0, 0.8]) this.world.addSphere(new THREE.Vector3(x, y + 0.6, z).addScaledVector(axis, t), 0.8, 0.3, POD_OWNER);
     this.world.finalize();
-    this.pod = g;
+    this.pod = g; this.podBaseY = y;
     this.group.add(g);
   }
 
   private updatePod(dt: number, night: number): void {
     if (!this.pod) return;
     const t = this.animalTime;
+    if (this.podShake > 0) { this.podShake -= dt; this.pod.position.x += (Math.random() - 0.5) * 0.04; this.pod.position.y = this.podBaseY + (Math.random() - 0.5) * 0.04; }
     for (const sp of this.smoke) {
       const ph = (sp.userData.phase + t * 0.12) % 1; // 0..1 along its life
       sp.position.set(Math.sin(ph * 6 + sp.userData.phase * 9) * 0.3 + ph * 1.8, 1 + ph * 7, -1.2 + ph * 1.2);

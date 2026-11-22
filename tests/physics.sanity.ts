@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { CollisionWorld } from '../src/physics/CollisionWorld';
 import { GorillaPlayer } from '../src/player/GorillaPlayer';
 import { heightAt } from '../src/world/Terrain';
+import { Progress } from '../src/game/Progress';
 import { ArmCalibration, REF_SPAN } from '../src/player/ArmCalibration';
 
 let failed = 0;
@@ -129,6 +130,20 @@ function swipe(slip: number): number {
   w.removeOwner(7);
   check('felled tree stops being solid', w.ownerAt(V(0.5, 3, 0)) !== 7 && w.distance(V(0.4, 3, 0)) > 1);
   check('other trees stay solid', w.ownerAt(V(20.5, 3, 0)) === 8);
+}
+
+// 9. Rotated boxes and progress rules
+{
+  const w = new CollisionWorld(); w.hull = false;
+  w.addBox(V(10, 0, 10), V(4, 2, 1), 0.2, Math.PI / 2); // long axis (x) turned to point along z
+  check('rotated box is long along z', w.distance(V(10, 0, 11.8)) < 0 && w.distance(V(11.8, 0, 10)) > 1);
+  const pr = new Progress();
+  check('objective starts with the pod', pr.objective()[0].includes('pod'));
+  pr.podDestroyed = true;
+  check('hub objective says what is missing', pr.objective()[1] === 'Need 10 wood, 8 stone, 8 steel');
+  pr.add('wood', 10); pr.add('stone', 8); pr.add('steel', 8);
+  check('hub objective says press X when affordable', pr.objective()[1] === 'Press X');
+  check('lantern stays locked until 20 wood', !pr.recipe('lantern').unlocked(pr) && (pr.add('wood', 10), pr.recipe('lantern').unlocked(pr)));
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');

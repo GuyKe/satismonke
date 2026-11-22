@@ -4,18 +4,26 @@ import { CollisionWorld } from './physics/CollisionWorld';
 import { GorillaPlayer } from './player/GorillaPlayer';
 import { ArmCalibration } from './player/ArmCalibration';
 import { buildCapsule } from './world/Capsule';
-import { Planet } from './world/Planet';
+import { Planet, POD_OWNER, BOULDER_OWNER } from './world/Planet';
+import { buildHubMesh, HubMesh } from './world/Hub';
+import { heightAt } from './world/Terrain';
 import { MenuConsole } from './ui/MenuConsole';
 import { TelemetryScreen } from './ui/TelemetryScreen';
 import { LaserPointer } from './ui/LaserPointer';
 import { Overlay } from './ui/Overlay';
 import { MapMenu } from './ui/MapMenu';
-import { WoodHud } from './ui/WoodHud';
+import { RecipePanel } from './ui/RecipePanel';
+import { ComputerScreen } from './ui/ComputerScreen';
+import { ResourceHud, ObjectiveHud } from './ui/Hud';
+import { Progress, RECIPES, POD_HITS, POD_STEEL } from './game/Progress';
 import { Story } from './game/Story';
 import { Sfx } from './audio/Sfx';
 import { loadSettings } from './settings';
 
 const PLANET_GRAVITY_G = 0.6;
+
+/** Anything you can point the laser at and click. */
+interface Interactive { mesh: THREE.Mesh; hover(pointer: number, uv: THREE.Vector2 | null): boolean; click(pointer: number): boolean }
 
 async function boot() {
   if (new URLSearchParams(location.search).has('emu')) {
@@ -59,6 +67,55 @@ async function boot() {
   scene.add(rig);
   const overlay = new Overlay(camera);
 
+  // ---- Progress, crafting, HUDs ----
+  const progress = new Progress();
+  const resourceHud = new ResourceHud();
+  const objectiveHud = new ObjectiveHud();
+  const hudDom = document.createElement('div');
+  hudDom.style.cssText = 'position:fixed;right:16px;top:16px;font:bold 16px monospace;color:#e8b27a;display:none;pointer-events:none;text-align:right;white-space:pre;text-shadow:0 0 4px #000';
+  document.body.appendChild(hudDom);
+
+  const toasts: { sprite: THREE.Sprite; t: number }[] = [];
+  const toast = (text: string, pos: THREE.Vector3) => {
+    const c = document.createElement('canvas'); c.width = 512; c.height = 64;
+    const g = c.getContext('2d')!; g.font = 'bold 44px monospace'; g.textAlign = 'center'; g.lineWidth = 6; g.strokeStyle = '#000'; g.fillStyle = '#ffd9a0';
+    g.strokeText(text, 256, 46); g.fillText(text, 256, 46);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false }));
+    sp.scale.set(3, 0.375, 1); sp.position.copy(pos); sp.renderOrder = 900;
+    scene.add(sp); toasts.push({ sprite: sp, t: 0 });
+  };
+
+  // Floating panels (map = A, crafting = X): one at a time, in front of your face
+  const map = new MapMenu(() => setPanel(null));
+  const craftPanel = new RecipePanel('CRAFTING', RECIPES.filter(r => r.where === 'x'), progress, id => craft(id), 'More recipes at the Hub crafting bench', 0.8);
+  map.mesh.visible = craftPanel.mesh.visible = false;
+  scene.add(map.mesh, craftPanel.mesh);
+  let floating: 'map' | 'craft' | null = null;
+  const setPanel = (p: 'map' | 'craft' | null) => {
+    floating = planet && !ship.visible ? p : null;
+    map.mesh.visible = floating === 'map'; craftPanel.mesh.visible = floating === 'craft';
+  };
+
+  // Hub: ghost while placing, bench + computer once built
+  let placing = false;
+  let ghost: HubMesh | null = null;
+  let ghostPose: { x: number; z: number; y: number; yaw: number; ok: boolean; reason: string } | null = null;
+  let hubUi: { bench: RecipePanel; computer: ComputerScreen } | null = null;
+  const lantern = new THREE.PointLight(0xffe2a0, 3, 16, 2);
+
+  const craft = (id: string) => {
+    const r = progress.recipe(id);
+    if (progress.has(id) || !r.unlocked(progress) || !progress.canAfford(r.cost)) { sfx.fail(); return; }
+    progress.spend(r.cost); progress.crafted.add(id); sfx.craft();
+    if (id === 'hub') {
+      placing = true; setPanel(null);
+      ghost = buildHubMesh(true); scene.add(ghost.group);
+      toast('Aim and pull the trigger to place', new THREE.Vector3().copy(player.position).add(camera.position).add(new THREE.Vector3(0, 0.3, 0)));
+    }
+    if (id === 'lantern') { lantern.position.set(0, -0.2, -0.2); camera.add(lantern); }
+    if (id === 'gloves') { player.jumpMult = 1.5; player.maxSpeed = 10; }
+  };
+
   // ---- Story: Play -> alarm -> crash -> title -> planet ----
   let planet: Planet | null = null;
   const land = () => {
@@ -74,7 +131,9 @@ async function boot() {
     planet.placePod(new THREE.Vector3().copy(player.position).add(camera.position), fwd.normalize());
     planet.onRoar = (pos, kind) => sfx.roar(pos, kind);
     planet.onTreeLanded = pos => sfx.thump(pos);
-    planet.onWood = (n, pos) => { wood += n; woodHud.set(wood); sfx.pickup(); toast(`+${n} wood`, pos); };
+    planet.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); sfx.pickup(); toast(`+${k} wood`, pos); };
+    planet.onStone = (n, pos) => { progress.add('stone', n); progress.bouldersBroken++; sfx.crumble(); toast(`+${n} stone`, pos); };
+    planet.onPodDestroyed = pos => { progress.podDestroyed = true; progress.podHits = POD_HITS; progress.add('steel', POD_STEEL); sfx.crumble(); toast(`+${POD_STEEL} steel`, pos); };
     sfx.startWind();
   };
   const story = new Story({
@@ -102,6 +161,8 @@ async function boot() {
   const rays = [0, 1].map(i => renderer.xr.getController(i));
   const inputs: (XRInputSource | null)[] = [null, null];
   const lasers = rays.map(r => new LaserPointer(r));
+  const hoverTarget: (Interactive | null)[] = [null, null];
+  hoverTarget[99] = null;
   const handMeshes = [0, 1].map(() => {
     const m = new THREE.Mesh(
       new THREE.SphereGeometry(player.handRadius, 20, 14),
@@ -114,17 +175,22 @@ async function boot() {
     const gp = inputs[i]?.gamepad as (Gamepad & { hapticActuators?: { pulse(v: number, d: number): void }[] }) | undefined;
     try { gp?.hapticActuators?.[0]?.pulse(strength, ms); } catch { /* no haptics */ }
   };
+  const press = (i: number) => {
+    const t = hoverTarget[i];
+    if (t && t.click(i)) { buzz(i, 0.6, 40); return; }
+    if (placing) tryPlaceHub();
+  };
   rays.forEach((r, i) => {
     rig.add(r); rig.add(grips[i]);
     r.addEventListener('connected', e => {
       inputs[i] = (e as unknown as { data: XRInputSource }).data;
-      if (inputs[i]?.handedness === 'left') { // wood counter on the left wrist
-        woodHud.mesh.rotation.x = -Math.PI / 2; woodHud.mesh.position.set(0, 0.03, 0.03);
-        grips[i].add(woodHud.mesh);
-      }
+      const hand = inputs[i]?.handedness;
+      // wrist displays: resources on the left, objective on the right
+      const hud = hand === 'left' ? resourceHud.mesh : hand === 'right' ? objectiveHud.mesh : null;
+      if (hud) { hud.rotation.x = -Math.PI / 2 + 0.35; hud.position.set(0, 0.04, 0.05); grips[i].add(hud); }
     });
     r.addEventListener('disconnected', () => { inputs[i] = null; });
-    r.addEventListener('selectstart', () => { if (menu.click(i)) buzz(i, 0.6, 40); });
+    r.addEventListener('selectstart', () => press(i));
   });
 
   const arms = new ArmCalibration(settings);
@@ -134,32 +200,14 @@ async function boot() {
   );
   scene.add(torso);
 
-  // ---- Wood, map, toasts ----
-  let wood = 0;
-  const woodHud = new WoodHud();
-  const woodDom = document.createElement('div');
-  woodDom.style.cssText = 'position:fixed;right:16px;top:16px;font:bold 18px monospace;color:#e8b27a;display:none;pointer-events:none';
-  document.body.appendChild(woodDom);
-  const toasts: { sprite: THREE.Sprite; t: number }[] = [];
-  const toast = (text: string, pos: THREE.Vector3) => {
-    const c = document.createElement('canvas'); c.width = 256; c.height = 64;
-    const g = c.getContext('2d')!; g.font = 'bold 44px monospace'; g.textAlign = 'center'; g.lineWidth = 6; g.strokeStyle = '#000'; g.fillStyle = '#ffd9a0';
-    g.strokeText(text, 128, 46); g.fillText(text, 128, 46);
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false }));
-    sp.scale.set(2, 0.5, 1); sp.position.copy(pos); sp.renderOrder = 900;
-    scene.add(sp); toasts.push({ sprite: sp, t: 0 });
-  };
-  const map = new MapMenu(() => setMap(false));
-  map.mesh.visible = false;
-  scene.add(map.mesh);
-  let mapOpen = false;
-  const setMap = (open: boolean) => { mapOpen = open && !!planet && !ship.visible; map.mesh.visible = mapOpen; };
-  // Right controller: A (buttons[4]) = map, B (buttons[5]) = skip the crash scene. Squeeze (buttons[1]) = grip.
+  // Buttons (Quest Touch): right A = buttons[4], right B = buttons[5], left X = buttons[4], grip = buttons[1]
   const btn = (i: number, b: number) => !!inputs[i]?.gamepad?.buttons[b]?.pressed;
-  const keys = { a: false, b: false, grip: false };
-  addEventListener('keydown', e => { if (e.code === 'KeyM') keys.a = true; if (e.code === 'KeyB') keys.b = true; if (e.code === 'KeyG') keys.grip = true; });
-  addEventListener('keyup', e => { if (e.code === 'KeyM') keys.a = false; if (e.code === 'KeyB') keys.b = false; if (e.code === 'KeyG') keys.grip = false; });
-  let aPrev = false, bPrev = false;
+  const handBtn = (hand: 'left' | 'right', b: number) => [0, 1].some(i => inputs[i]?.handedness === hand && btn(i, b));
+  const keys = { a: false, b: false, x: false, grip: false };
+  const keyMap: Record<string, keyof typeof keys> = { KeyM: 'a', KeyB: 'b', KeyX: 'x', KeyG: 'grip' };
+  addEventListener('keydown', e => { const k = keyMap[e.code]; if (k) keys[k] = true; });
+  addEventListener('keyup', e => { const k = keyMap[e.code]; if (k) keys[k] = false; });
+  let aPrev = false, bPrev = false, xPrev = false;
 
   // ---- Desktop preview: drag to look, click the menu ----
   const mouse = new THREE.Vector2();
@@ -172,7 +220,7 @@ async function boot() {
     mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
     if (dragging) { yaw -= e.movementX * 0.004; pitch = THREE.MathUtils.clamp(pitch - e.movementY * 0.004, -1.4, 1.4); }
   });
-  addEventListener('click', () => { if (!renderer.xr.isPresenting) { if (mapOpen) map.click(99); else menu.click(99); } });
+  addEventListener('click', () => { if (!renderer.xr.isPresenting) press(99); });
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
@@ -195,6 +243,34 @@ async function boot() {
     });
   };
 
+  // ---- Hub placement ----
+  /** Where does a ray first dip below the terrain? */
+  const aimAtTerrain = (o: THREE.Vector3, d: THREE.Vector3): THREE.Vector3 | null => {
+    for (let t = 1; t <= 40; t += 0.5) {
+      const x = o.x + d.x * t, y = o.y + d.y * t, z = o.z + d.z * t;
+      if (y < heightAt(x, z)) {
+        let a = t - 0.5, b = t;
+        for (let k = 0; k < 8; k++) { const m = (a + b) / 2; if (o.y + d.y * m < heightAt(o.x + d.x * m, o.z + d.z * m)) b = m; else a = m; }
+        return new THREE.Vector3(o.x + d.x * b, 0, o.z + d.z * b);
+      }
+    }
+    return null;
+  };
+  const tryPlaceHub = () => {
+    if (!placing || !planet || !ghostPose) return;
+    if (!ghostPose.ok) { sfx.fail(); toast(ghostPose.reason || 'Aim at the ground', new THREE.Vector3().copy(player.position).add(camera.position)); return; }
+    const built = planet.placeHub(ghostPose.x, ghostPose.z, ghostPose.yaw, ghostPose.y);
+    scene.remove(ghost!.group); ghost = null; placing = false; progress.hubPlaced = true;
+    const bench = new RecipePanel('CRAFTING BENCH', RECIPES.filter(r => r.where === 'bench'), progress, id => craft(id), 'Unlock more by exploring', 1.2);
+    const computer = new ComputerScreen(() => { progress.gamePlayed = true; });
+    bench.mesh.position.copy(built.mesh.benchScreenAt);
+    computer.mesh.position.copy(built.mesh.computerScreenAt);
+    built.group.add(bench.mesh, computer.mesh);
+    hubUi = { bench, computer };
+    sfx.craft(); sfx.thump(new THREE.Vector3(ghostPose.x, ghostPose.y, ghostPose.z));
+    toast('Hub built!', new THREE.Vector3(ghostPose.x, ghostPose.y + 3.5, ghostPose.z));
+  };
+
   const hl = [new THREE.Vector3(), new THREE.Vector3()];   // raw controller positions
   const sl = [new THREE.Vector3(), new THREE.Vector3()];   // arm-span-scaled, fed to physics
   const hadTouch = [false, false];
@@ -209,11 +285,11 @@ async function boot() {
     story.update(dt);
 
     // Buttons
-    const aNow = keys.a || btn(0, 4) && inputs[0]?.handedness === 'right' || btn(1, 4) && inputs[1]?.handedness === 'right';
-    const bNow = keys.b || btn(0, 5) && inputs[0]?.handedness === 'right' || btn(1, 5) && inputs[1]?.handedness === 'right';
-    if (aNow && !aPrev) setMap(!mapOpen);                 // A: map (on the planet)
-    if (bNow && !bPrev && ship.visible) story.skipToTitle(); // B: skip the crash scene (capsule only)
-    aPrev = aNow; bPrev = bNow;
+    const aNow = keys.a || handBtn('right', 4), bNow = keys.b || handBtn('right', 5), xNow = keys.x || handBtn('left', 4);
+    if (aNow && !aPrev) setPanel(floating === 'map' ? null : 'map');        // A: map
+    if (xNow && !xPrev) setPanel(floating === 'craft' ? null : 'craft');    // X: crafting
+    if (bNow && !bPrev && ship.visible) story.skipToTitle();               // B: skip the crash scene (capsule only)
+    aPrev = aNow; bPrev = bNow; xPrev = xNow;
     const gripDown = [keys.grip || btn(0, 1), keys.grip || btn(1, 1)];
     overlay.set(story.blackAlpha, story.titleAlpha);
     sfx.rumble(story.rumble);
@@ -243,14 +319,47 @@ async function boot() {
       hadTouch[i] = h.touching;
     });
 
-    // Grip + punch a tree: it falls over, vanishes after 3 s and gives wood
+    // Grip + punch: fell trees, smash boulders (stone) and the crashed pod (steel)
     const headW = new THREE.Vector3().copy(player.position).add(camera.position);
     if (planet && !ship.visible) {
       player.hands.forEach((h, i) => {
-        if (!h.started || !gripDown[i] || h.impact < 2.2) return;
+        if (!h.started || !gripDown[i]) return;
         const id = player.world.ownerAt(h.contact);
-        if (id >= 0 && planet!.fellTree(id, headW)) { sfx.chop(); buzz(i, 1, 90); }
+        if (id < 0) return;
+        const isTree = id < POD_OWNER;
+        const need = isTree ? (progress.has('axe') ? 1.2 : 2.2) : 2.0;
+        if (h.impact < need) return;
+        if (id === POD_OWNER) {
+          const left = planet!.hitPod(POD_HITS); progress.podHits = POD_HITS - left;
+          if (left) sfx.clink(); buzz(i, 1, 90);
+        } else if (id >= BOULDER_OWNER) {
+          const left = planet!.hitBoulder(id - BOULDER_OWNER);
+          if (left) sfx.clink(); buzz(i, 1, 90);
+        } else if (planet!.fellTree(id, headW)) { sfx.chop(); buzz(i, 1, 90); }
       });
+    }
+
+    // Everything you can point at right now
+    scene.updateMatrixWorld(true);
+    const targets: Interactive[] = [];
+    if (ship.visible) targets.push(menu);
+    else {
+      if (floating === 'map') targets.push(map);
+      if (floating === 'craft') targets.push(craftPanel);
+      if (hubUi && planet?.hub && Math.hypot(planet.hub.pose.x - headW.x, planet.hub.pose.z - headW.z) < 14) targets.push(hubUi.bench, hubUi.computer);
+    }
+    const meshes = targets.map(t => t.mesh);
+    const setHover = (pointer: number, hit: { index: number; uv: THREE.Vector2 } | null) => {
+      targets.forEach((t, k) => t.hover(pointer, hit && hit.index === k ? hit.uv : null));
+      hoverTarget[pointer] = hit ? targets[hit.index] : null;
+      if (hit && hubUi && targets[hit.index] === hubUi.bench) progress.benchOpened = true;
+    };
+    if (inXR) lasers.forEach((l, i) => setHover(i, l.castMany(meshes, placing)));
+    else {
+      lasers.forEach(l => l.hide());
+      mouseRay.setFromCamera(mouse, camera);
+      const h = mouseRay.intersectObjects(meshes, false).find(x => x.uv);
+      setHover(99, h && h.uv ? { index: meshes.indexOf(h.object as THREE.Mesh), uv: h.uv } : null);
     }
 
     if (ship.visible) {
@@ -258,14 +367,6 @@ async function boot() {
       const s = story.shake;
       ship.position.set((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
       setAlarmLights(story.alarm > 0, elapsed);
-
-      scene.updateMatrixWorld(true);
-      if (inXR) {
-        lasers.forEach((l, i) => menu.hover(i, l.cast(menu.mesh, false)));
-      } else {
-        mouseRay.setFromCamera(mouse, camera);
-        menu.hover(99, mouseRay.intersectObject(menu.mesh, false)[0]?.uv ?? null);
-      }
       menu.update(elapsed);
       telemetry.update(dt, {
         speed: player.velocity.length(),
@@ -274,25 +375,46 @@ async function boot() {
         gravityG: player.gravityG,
         gripPct: (1 - player.lastSlip) * 100,
       });
-    } else {
-      scene.updateMatrixWorld(true);
-      if (mapOpen) {
-        if (inXR) lasers.forEach((l, i) => map.hover(i, l.cast(map.mesh, false)));
-        else { mouseRay.setFromCamera(mouse, camera); map.hover(99, mouseRay.intersectObject(map.mesh, false)[0]?.uv ?? null); }
-      } else lasers.forEach(l => l.hide());
     }
-    if (mapOpen && planet) {
-      // float in front of you, facing you
-      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); fwd.y = 0;
-      if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
-      fwd.normalize();
+
+    // Floating panels sit in front of your face
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); fwd.y = 0;
+    if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
+    fwd.normalize();
+    if (floating && planet) {
+      const panel = floating === 'map' ? map.mesh : craftPanel.mesh;
       const target = headW.clone().addScaledVector(fwd, 0.85); target.y = headW.y - 0.1;
-      map.mesh.position.lerp(target, 1 - Math.exp(-8 * dt));
-      map.mesh.lookAt(headW);
-      map.update(dt, planet, player.position.x + camera.position.x, player.position.z + camera.position.z, fwd.x, fwd.z);
+      panel.position.lerp(target, 1 - Math.exp(-8 * dt));
+      panel.lookAt(headW);
+      if (floating === 'map') map.update(dt, planet, headW.x, headW.z, fwd.x, fwd.z); else craftPanel.update();
     }
-    woodDom.style.display = planet && !inXR ? 'block' : 'none';
-    woodDom.textContent = `WOOD ${wood}   [M] map  [G+punch] chop`;
+    if (hubUi) { hubUi.bench.update(); hubUi.computer.update(dt); }
+
+    // Hub placement ghost follows your aim
+    if (placing && ghost && planet) {
+      let o: THREE.Vector3, d: THREE.Vector3;
+      if (inXR) {
+        const idx = inputs[1]?.handedness === 'right' ? 1 : inputs[0]?.handedness === 'right' ? 0 : 1;
+        o = new THREE.Vector3().setFromMatrixPosition(rays[idx].matrixWorld);
+        d = new THREE.Vector3(0, 0, -1).transformDirection(rays[idx].matrixWorld);
+      } else { o = headW.clone(); d = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); }
+      const hit = aimAtTerrain(o, d);
+      ghost.group.visible = !!hit;
+      if (hit) {
+        const yawH = Math.round(Math.atan2(-fwd.z, fwd.x) / (Math.PI / 12)) * (Math.PI / 12); // long axis along your facing
+        const res = planet.canPlaceHub(hit.x, hit.z, yawH);
+        if (res.ok && Math.hypot(hit.x - headW.x, hit.z - headW.z) < 8) { res.ok = false; res.reason = 'Too close: step back'; }
+        ghostPose = { x: hit.x, z: hit.z, y: res.y, yaw: yawH, ok: res.ok, reason: res.reason };
+        ghost.group.position.set(hit.x, res.y, hit.z); ghost.group.rotation.y = yawH;
+        (ghost.group.userData.ghostMaterial as THREE.MeshBasicMaterial).color.set(res.ok ? 0x55ff88 : 0xff5555);
+      } else ghostPose = null;
+    }
+
+    // Wrist displays and the desktop text overlay
+    const obj = progress.objective();
+    resourceHud.set(progress); objectiveHud.set(obj);
+    hudDom.style.display = planet && !inXR ? 'block' : 'none';
+    hudDom.textContent = `OBJECTIVE: ${obj[0]}\n${obj[1]}\nwood ${progress.items.wood}  stone ${progress.items.stone}  steel ${progress.items.steel}\n[M] map  [X] craft  [G+punch] hit  [click] use`;
     for (let i = toasts.length - 1; i >= 0; i--) {
       const t = toasts[i]; t.t += dt;
       t.sprite.position.y += dt * 0.8;
@@ -307,7 +429,13 @@ async function boot() {
   });
 
   // Exposed for debugging / automated tests
-  (window as unknown as Record<string, unknown>).__game = { fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)), setMap, wood: () => wood, renderer, scene, look: (y: number, p: number) => { yaw = y; pitch = p; }, player, story, settings, menu, get planet() { return planet; } };
+  (window as unknown as Record<string, unknown>).__game = {
+    progress, craft, tryPlaceHub, setPanel, renderer, scene, player, story, settings, menu,
+    fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
+    look: (y: number, p: number) => { yaw = y; pitch = p; },
+    get placing() { return placing; }, get ghostPose() { return ghostPose; }, get hubUi() { return hubUi; },
+    get planet() { return planet; },
+  };
 }
 
 boot();

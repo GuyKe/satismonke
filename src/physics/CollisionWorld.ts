@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export interface BoxCollider { center: THREE.Vector3; half: THREE.Vector3; slip: number; }
+export interface BoxCollider { center: THREE.Vector3; half: THREE.Vector3; slip: number; cos: number; sin: number; }
 export interface SphereCollider { center: THREE.Vector3; radius: number; slip: number; owner: number; }
 /** Vertical capsule: a trunk from y0 to y1 with radius r. */
 /** Flat-topped cylinder: mesas and rock spires. */
@@ -35,8 +35,9 @@ export class CollisionWorld {
   private slipOut = 0;
   private ownerOut = -1;
 
-  addBox(center: THREE.Vector3, size: THREE.Vector3, slip = 0.3): BoxCollider {
-    const b = { center: center.clone(), half: size.clone().multiplyScalar(0.5), slip };
+  /** `yaw` rotates the box about the vertical axis (same convention as Object3D.rotation.y). */
+  addBox(center: THREE.Vector3, size: THREE.Vector3, slip = 0.3, yaw = 0): BoxCollider {
+    const b = { center: center.clone(), half: size.clone().multiplyScalar(0.5), slip, cos: Math.cos(yaw), sin: Math.sin(yaw) };
     this.boxes.push(b);
     return b;
   }
@@ -101,9 +102,10 @@ export class CollisionWorld {
       if (g < d) { d = g; slip = this.groundSlip; owner = -1; }
     }
     for (const b of this.boxes) {
-      const qx = Math.abs(p.x - b.center.x) - b.half.x;
+      const dx = p.x - b.center.x, dz = p.z - b.center.z;
+      const qx = Math.abs(dx * b.cos - dz * b.sin) - b.half.x;
       const qy = Math.abs(p.y - b.center.y) - b.half.y;
-      const qz = Math.abs(p.z - b.center.z) - b.half.z;
+      const qz = Math.abs(dx * b.sin + dz * b.cos) - b.half.z;
       const bd = Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qy, qz), 0);
       if (bd < d) { d = bd; slip = b.slip; owner = -1; }
     }

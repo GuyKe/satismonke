@@ -44,8 +44,11 @@ export class GorillaPlayer {
 
   /** Runtime gravity in g (not persisted): the capsule is low-g, planets can differ. */
   gravityG: number;
+  /** Runtime launch multiplier and speed cap (upgrades change these; not persisted). */
+  jumpMult: number;
+  maxSpeed: number;
 
-  constructor(public world: CollisionWorld, private settings: Settings) { this.gravityG = settings.gravityG; }
+  constructor(public world: CollisionWorld, private settings: Settings) { this.gravityG = settings.gravityG; this.jumpMult = settings.jumpMult; this.maxSpeed = settings.maxSpeed; }
 
   get anyTouching(): boolean { return this.hands[0].touching || this.hands[1].touching; }
 
@@ -133,8 +136,8 @@ export class GorillaPlayer {
     } else if (this.touchedLast) {
       const avg = new THREE.Vector3();
       for (const v of this.history) avg.add(v);
-      avg.divideScalar(this.history.length).multiplyScalar(this.settings.jumpMult);
-      if (avg.length() > this.settings.maxSpeed) avg.setLength(this.settings.maxSpeed);
+      avg.divideScalar(this.history.length).multiplyScalar(this.jumpMult);
+      if (avg.length() > this.maxSpeed) avg.setLength(this.maxSpeed);
       this.velocity.copy(avg);
     }
     this.touchedLast = touching;

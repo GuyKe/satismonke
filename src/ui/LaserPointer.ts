@@ -25,6 +25,23 @@ export class LaserPointer {
     this.raycaster.far = 8;
   }
 
+  /** Cast against several targets; returns the nearest hit's index and UV (or null). */
+  castMany(targets: THREE.Mesh[], alwaysShow: boolean): { index: number; uv: THREE.Vector2 } | null {
+    this.source.updateWorldMatrix(true, false);
+    this.source.matrixWorld.decompose(this.origin, this.quat, new THREE.Vector3());
+    this.dir.set(0, 0, -1).applyQuaternion(this.quat);
+    this.raycaster.set(this.origin, this.dir);
+    const hit = this.raycaster.intersectObjects(targets, false).find(h => h.uv && h.object.visible);
+    if (hit && hit.uv) {
+      this.beam.scale.z = hit.distance;
+      this.dot.position.set(0, 0, -hit.distance);
+      this.dot.visible = true; this.group.visible = true;
+      return { index: targets.indexOf(hit.object as THREE.Mesh), uv: hit.uv };
+    }
+    this.dot.visible = false; this.beam.scale.z = 1.5; this.group.visible = alwaysShow;
+    return null;
+  }
+
   /**
    * Cast against `target`. Returns the UV of the hit, or null.
    * `show` decides whether the beam is visible when it misses.
