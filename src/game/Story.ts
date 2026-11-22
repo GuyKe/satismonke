@@ -10,7 +10,17 @@ export class Story {
   phase: Phase = 'menu';
   t = 0;
 
-  constructor(private hooks: { onAlarm(): void; onCrash(): void; onLand(): void }) {}
+    private skipping = false;
+
+  constructor(private hooks: { onAlarm(): void; onCrash(): void; onLand(): void; onSkip(): void }) {}
+
+  /** B button: from the alarm/crash/dark scenes jump straight to the SATISMONKE title. Capsule only. */
+  skipToTitle(): boolean {
+    if (this.phase === 'alarm') { this.hooks.onSkip(); this.skipping = true; this.go('crash'); return true; }
+    if (this.phase === 'crash') { this.hooks.onSkip(); this.skipping = true; return true; }
+    if (this.phase === 'dark') { this.go('title'); return true; }
+    return false;
+  }
 
   start(): boolean {
     if (this.phase !== 'menu') return false;
@@ -25,7 +35,7 @@ export class Story {
     this.t += dt;
     switch (this.phase) {
       case 'alarm': if (this.t >= T.alarm) { this.go('crash'); this.hooks.onCrash(); } break;
-      case 'crash': if (this.t >= T.crash) this.go('dark'); break;
+      case 'crash': if (this.t >= T.crash) { const skip = this.skipping; this.skipping = false; this.go(skip ? 'title' : 'dark'); } break;
       case 'dark': if (this.t >= T.dark) this.go('title'); break;
       case 'title': if (this.t >= TITLE) { this.go('landing'); this.hooks.onLand(); } break;
       case 'landing': if (this.t >= T.landing) this.go('planet'); break;
@@ -54,7 +64,7 @@ export class Story {
   /** Camera-shake style amplitude in metres for the ship interior. */
   get shake(): number {
     if (this.phase === 'alarm') return 0.004 + 0.02 * Math.pow(this.t / T.alarm, 2);
-    if (this.phase === 'crash') return 0.12 * (1 - this.t / T.crash);
+    if (this.phase === 'crash' && !this.skipping) return 0.12 * (1 - this.t / T.crash);
     return 0;
   }
 

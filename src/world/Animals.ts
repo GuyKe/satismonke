@@ -19,10 +19,10 @@ export interface Animal {
   /** Neck-style heads only yaw (their tick already animates pitch). */
   yawOnly: boolean;
   /** Smoothed head angles and roar bookkeeping, owned by Planet. */
-  look: { yaw: number; pitch: number };
+  look: { yaw: number; pitch: number; away: boolean; timer: number; ay: number; ap: number };
   roar: { timer: number; next: number; noticed: boolean };
 }
-const base = () => ({ look: { yaw: 0, pitch: 0 }, roar: { timer: 0, next: 8 + Math.random() * 25, noticed: false } });
+const base = () => ({ look: { yaw: 0, pitch: 0, away: false, timer: 3 + Math.random() * 5, ay: 0, ap: 0 }, roar: { timer: 0, next: 8 + Math.random() * 25, noticed: false } });
 
 type Rng = () => number;
 type V3 = [number, number, number];

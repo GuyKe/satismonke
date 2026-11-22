@@ -111,6 +111,57 @@ export class Sfx {
     this.windNodes.push(src, bp, g, lfo, d);
   }
 
+  /** Cut all current sound quickly (used when the crash scene is skipped), then restore the volume. */
+  duck(): void {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.master.gain.cancelScheduledValues(t);
+    this.master.gain.setTargetAtTime(0, t, 0.03);
+    this.master.gain.setTargetAtTime(0.8, t + 0.6, 0.05);
+  }
+
+  /** A hard punch into wood: crack + thump. */
+  chop(): void {
+    if (!this.ctx) return;
+    const c = this.ctx, t = c.currentTime;
+    const th = c.createOscillator(); th.type = 'sine';
+    th.frequency.setValueAtTime(150, t); th.frequency.exponentialRampToValueAtTime(45, t + 0.25);
+    const tg = c.createGain(); tg.gain.setValueAtTime(1.0, t); tg.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    th.connect(tg); tg.connect(this.master); th.start(t); th.stop(t + 0.35);
+    const n = this.noiseSource(false);
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 1.5;
+    const ng = c.createGain(); ng.gain.setValueAtTime(0.7, t); ng.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    n.connect(bp); bp.connect(ng); ng.connect(this.master); n.start(t); n.stop(t + 0.15);
+  }
+
+  /** The tree hitting the ground. */
+  thump(pos: { x: number; y: number; z: number }): void {
+    if (!this.ctx) return;
+    const c = this.ctx, t = c.currentTime;
+    const panner = c.createPanner(); panner.panningModel = 'HRTF'; panner.refDistance = 5;
+    panner.positionX.value = pos.x; panner.positionY.value = pos.y; panner.positionZ.value = pos.z;
+    panner.connect(this.master);
+    const o = c.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(80, t); o.frequency.exponentialRampToValueAtTime(30, t + 0.5);
+    const g = c.createGain(); g.gain.setValueAtTime(1.4, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    o.connect(g); g.connect(panner); o.start(t); o.stop(t + 0.7);
+    const n = this.noiseSource(false);
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 700;
+    const ng = c.createGain(); ng.gain.setValueAtTime(0.8, t); ng.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+    n.connect(lp); lp.connect(ng); ng.connect(panner); n.start(t); n.stop(t + 0.55);
+  }
+
+  /** Little rising blip when wood is collected. */
+  pickup(): void {
+    if (!this.ctx) return;
+    const c = this.ctx, t = c.currentTime;
+    for (const [f, dt] of [[520, 0], [780, 0.07]] as const) {
+      const o = c.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
+      const g = c.createGain(); g.gain.setValueAtTime(0.0001, t + dt); g.gain.exponentialRampToValueAtTime(0.35, t + dt + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + dt + 0.2);
+      o.connect(g); g.connect(this.master); o.start(t + dt); o.stop(t + dt + 0.25);
+    }
+  }
+
   /** Keep the 3D audio listener on the player's head. */
   setListener(pos: { x: number; y: number; z: number }, fwd: { x: number; y: number; z: number }): void {
     if (!this.ctx) return;

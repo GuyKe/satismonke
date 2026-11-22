@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 
 export interface BoxCollider { center: THREE.Vector3; half: THREE.Vector3; slip: number; }
-export interface SphereCollider { center: THREE.Vector3; radius: number; slip: number; }
+export interface SphereCollider { center: THREE.Vector3; radius: number; slip: number; owner: number; }
 /** Vertical capsule: a trunk from y0 to y1 with radius r. */
 /** Flat-topped cylinder: mesas and rock spires. */
 export interface PillarCollider { x: number; z: number; y0: number; y1: number; radius: number; slip: number; }
-export interface CylinderCollider { x: number; z: number; y0: number; y1: number; radius: number; slip: number; }
+export interface CylinderCollider { x: number; z: number; y0: number; y1: number; radius: number; slip: number; owner: number; }
 
 const EMPTY_S: SphereCollider[] = [], EMPTY_C: CylinderCollider[] = [], EMPTY_P: PillarCollider[] = [];
 
@@ -33,17 +33,29 @@ export class CollisionWorld {
   private static readonly CELL = 32;
   private static readonly MARGIN = 3;
   private slipOut = 0;
+  private ownerOut = -1;
 
   addBox(center: THREE.Vector3, size: THREE.Vector3, slip = 0.3): BoxCollider {
     const b = { center: center.clone(), half: size.clone().multiplyScalar(0.5), slip };
     this.boxes.push(b);
     return b;
   }
-  addSphere(center: THREE.Vector3, radius: number, slip = 0.3): void {
-    this.spheres.push({ center: center.clone(), radius, slip });
+  /** `owner` ties a collider to a game object (e.g. a tree) so it can be looked up or removed. */
+  addSphere(center: THREE.Vector3, radius: number, slip = 0.3, owner = -1): void {
+    this.spheres.push({ center: center.clone(), radius, slip, owner });
   }
-  addCylinder(x: number, z: number, y0: number, y1: number, radius: number, slip = 0): void {
-    this.cylinders.push({ x, z, y0, y1, radius, slip });
+  addCylinder(x: number, z: number, y0: number, y1: number, radius: number, slip = 0, owner = -1): void {
+    this.cylinders.push({ x, z, y0, y1, radius, slip, owner });
+  }
+
+  /** Id of the object owning the surface nearest to p (-1 if none). */
+  ownerAt(p: THREE.Vector3): number { this.evaluate(p); return this.ownerOut; }
+
+  /** Remove every collider belonging to `owner` (a felled tree stops being solid). */
+  removeOwner(owner: number): void {
+    for (const arr of [this.spheres, this.cylinders] as { owner: number }[][])
+      for (let i = arr.length - 1; i >= 0; i--) if (arr[i].owner === owner) arr.splice(i, 1);
+    if (this.grid) this.finalize();
   }
 
   addPillar(x: number, z: number, y0: number, y1: number, radius: number, slip = 0.3): void {
@@ -71,7 +83,7 @@ export class CollisionWorld {
 
   /** Evaluates the field and records the slip of the nearest surface in `slipOut`. */
   private evaluate(p: THREE.Vector3): number {
-    let d = Infinity, slip = 0;
+    let d = Infinity, slip = 0, owner = -1;
     if (this.hull) {
       const z = THREE.MathUtils.clamp(p.z, -this.halfSegment, this.halfSegment);
       d = this.radius - Math.hypot(p.x, p.y, p.z - z);
@@ -79,21 +91,21 @@ export class CollisionWorld {
     }
     if (this.groundY !== null) {
       const g = p.y - this.groundY;
-      if (g < d) { d = g; slip = this.groundSlip; }
+      if (g < d) { d = g; slip = this.groundSlip; owner = -1; }
     }
     if (this.heightFn) {
       const f = this.heightFn, e = 0.4;
       const gx = (f(p.x + e, p.z) - f(p.x - e, p.z)) / (2 * e);
       const gz = (f(p.x, p.z + e) - f(p.x, p.z - e)) / (2 * e);
       const g = (p.y - f(p.x, p.z)) / Math.sqrt(1 + gx * gx + gz * gz);
-      if (g < d) { d = g; slip = this.groundSlip; }
+      if (g < d) { d = g; slip = this.groundSlip; owner = -1; }
     }
     for (const b of this.boxes) {
       const qx = Math.abs(p.x - b.center.x) - b.half.x;
       const qy = Math.abs(p.y - b.center.y) - b.half.y;
       const qz = Math.abs(p.z - b.center.z) - b.half.z;
       const bd = Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qy, qz), 0);
-      if (bd < d) { d = bd; slip = b.slip; }
+      if (bd < d) { d = bd; slip = b.slip; owner = -1; }
     }
     let spheres = this.spheres, cylinders = this.cylinders, pillars = this.pillars;
     if (this.grid) {
@@ -102,19 +114,20 @@ export class CollisionWorld {
     }
     for (const s of spheres) {
       const sd = Math.hypot(p.x - s.center.x, p.y - s.center.y, p.z - s.center.z) - s.radius;
-      if (sd < d) { d = sd; slip = s.slip; }
+      if (sd < d) { d = sd; slip = s.slip; owner = s.owner; }
     }
     for (const c of cylinders) {
       const cd = Math.hypot(p.x - c.x, p.y - THREE.MathUtils.clamp(p.y, c.y0, c.y1), p.z - c.z) - c.radius;
-      if (cd < d) { d = cd; slip = c.slip; }
+      if (cd < d) { d = cd; slip = c.slip; owner = c.owner; }
     }
     for (const q of pillars) {
       const dr = Math.hypot(p.x - q.x, p.z - q.z) - q.radius;
       const dy = Math.abs(p.y - (q.y0 + q.y1) / 2) - (q.y1 - q.y0) / 2;
       const pd = Math.min(Math.max(dr, dy), 0) + Math.hypot(Math.max(dr, 0), Math.max(dy, 0));
-      if (pd < d) { d = pd; slip = q.slip; }
+      if (pd < d) { d = pd; slip = q.slip; owner = -1; }
     }
     this.slipOut = slip;
+    this.ownerOut = owner;
     return d;
   }
 

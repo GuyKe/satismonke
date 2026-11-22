@@ -4,6 +4,12 @@ import { Animal, makeGround, makeFlyer } from './Animals';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { heightAt, buildTerrainMesh, pathMask, PONDS, LAKE, pondY, WATER_Y } from './Terrain';
 
+export interface TreeRec {
+  pine: boolean; x: number; y: number; z: number; h: number;
+  color: number; trunkIdx: number; foliageIdx: number; felled: boolean;
+  trunkLocal: THREE.Matrix4; foliageLocal: THREE.Matrix4;
+}
+
 export const DAY_SECONDS = 7 * 60;
 export const NIGHT_SECONDS = 5 * 60;
 const CYCLE = DAY_SECONDS + NIGHT_SECONDS;
@@ -72,6 +78,17 @@ export class Planet {
   private sun = new THREE.DirectionalLight(0xffe2a8, 2);
   private hemi = new THREE.HemisphereLight(0xc9a8ff, 0x7a3a8a, 0.8);
   private animals: Animal[] = [];
+  private treeRecs: TreeRec[] = [];
+  private trunkMesh!: THREE.InstancedMesh;
+  private canopyMesh!: THREE.InstancedMesh;
+  private pineMesh!: THREE.InstancedMesh;
+  private falling: { rec: TreeRec; group: THREE.Group; t: number; axis: THREE.Vector3; landed: boolean }[] = [];
+  /** Landmarks for the map. */
+  readonly marks = { mesas: [] as [number, number, number][], spires: [] as [number, number, number][], crystals: [] as [number, number][] };
+  /** A tree has finished falling and vanished: here is the wood it gave. */
+  onWood: ((amount: number, pos: THREE.Vector3) => void) | null = null;
+  /** A felled tree hit the ground. */
+  onTreeLanded: ((pos: THREE.Vector3) => void) | null = null;
   private clocks = new Map<Animal, number>();
   private probe = new THREE.Vector3();
   private smoke: THREE.Sprite[] = [];
@@ -211,23 +228,30 @@ export class Planet {
     const palette = [0x2fd1c1, 0xff6fb5, 0xffa940, 0x7d6bff], pinePal = [0x38c9a0, 0x9a6bff, 0xff7ac0, 0x4aa8ff];
     const m = new THREE.Matrix4(), col = new THREE.Color(), q = new THREE.Quaternion();
     let ci = 0, pi = 0;
+    this.trunkMesh = trunks; this.canopyMesh = canopies; this.pineMesh = pines;
     spots.forEach((t, i) => {
+      const rec: TreeRec = { pine: t.pine, x: t.x, y: t.y, z: t.z, h: t.h, color: t.pine ? pinePal[t.c] : palette[t.c], trunkIdx: i, foliageIdx: t.pine ? pi : ci, felled: false, trunkLocal: new THREE.Matrix4(), foliageLocal: new THREE.Matrix4() };
+      this.treeRecs.push(rec);
       if (!t.pine) {
         const w = t.h * 0.1 + 0.6;
         m.compose(new THREE.Vector3(t.x, t.y - 1.5, t.z), q, new THREE.Vector3(w, t.h + 1.5, w)); trunks.setMatrixAt(i, m);
+        rec.trunkLocal.compose(new THREE.Vector3(0, -1.5, 0), q, new THREE.Vector3(w, t.h + 1.5, w));
         const cy = t.y + t.h + t.cr * 0.35;
         m.compose(new THREE.Vector3(t.x, cy, t.z), q, new THREE.Vector3(t.cr, t.cr * 0.8, t.cr));
+        rec.foliageLocal.compose(new THREE.Vector3(0, cy - t.y, 0), q, new THREE.Vector3(t.cr, t.cr * 0.8, t.cr));
         canopies.setMatrixAt(ci, m); canopies.setColorAt(ci++, col.set(palette[t.c]));
-        this.world.addCylinder(t.x, t.z, t.y - 1.5, t.y + t.h, w * 0.38, 0);        // bark: grippy
-        this.world.addSphere(new THREE.Vector3(t.x, cy, t.z), t.cr * 0.85, 0.2);     // leafy canopy
+        this.world.addCylinder(t.x, t.z, t.y - 1.5, t.y + t.h, w * 0.38, 0, i);        // bark: grippy
+        this.world.addSphere(new THREE.Vector3(t.x, cy, t.z), t.cr * 0.85, 0.2, i);     // leafy canopy
       } else {
         const th = t.h * 0.55, w = 0.8, fh = t.h * 1.0, rad = t.cr * 0.95;
         m.compose(new THREE.Vector3(t.x, t.y - 1.5, t.z), q, new THREE.Vector3(w, th + 1.5, w)); trunks.setMatrixAt(i, m);
+        rec.trunkLocal.compose(new THREE.Vector3(0, -1.5, 0), q, new THREE.Vector3(w, th + 1.5, w));
         m.compose(new THREE.Vector3(t.x, t.y + th * 0.45, t.z), q, new THREE.Vector3(rad, fh, rad));
+        rec.foliageLocal.compose(new THREE.Vector3(0, th * 0.45, 0), q, new THREE.Vector3(rad, fh, rad));
         pines.setMatrixAt(pi, m); pines.setColorAt(pi++, col.set(pinePal[t.c]));
-        this.world.addCylinder(t.x, t.z, t.y - 1.5, t.y + th + 1, w * 0.38, 0);
-        this.world.addSphere(new THREE.Vector3(t.x, t.y + th * 0.45 + fh * 0.3, t.z), rad * 0.5, 0.2);
-        this.world.addSphere(new THREE.Vector3(t.x, t.y + th * 0.45 + fh * 0.62, t.z), rad * 0.3, 0.2);
+        this.world.addCylinder(t.x, t.z, t.y - 1.5, t.y + th + 1, w * 0.38, 0, i);
+        this.world.addSphere(new THREE.Vector3(t.x, t.y + th * 0.45 + fh * 0.3, t.z), rad * 0.5, 0.2, i);
+        this.world.addSphere(new THREE.Vector3(t.x, t.y + th * 0.45 + fh * 0.62, t.z), rad * 0.3, 0.2, i);
       }
     });
     this.group.add(trunks, canopies, pines);
@@ -274,6 +298,7 @@ export class Planet {
       const cap = new THREE.Mesh(new THREE.CircleGeometry(r * 0.9, 24).rotateX(-Math.PI / 2), grassMat);
       cap.position.set(x, top + 0.05, z); this.group.add(cap);
       this.world.addPillar(x, z, BASE, top, r * 0.95, 0.15);
+      this.marks.mesas.push([x, z, r]);
     }
     // spires like a giant stone mushroom: x, z, radius, height above the water
     for (const [x, z, r, hgt] of [[-45, -520, 7, 70], [120, -560, 9, 90], [-140, -300, 6, 55], [60, -235, 6, 48]]) {
@@ -282,6 +307,7 @@ export class Planet {
       const cap = rock(r * 1.8, r * 1.5, top - 6, top, 14); cap.position.set(x, 0, z); this.group.add(cap);
       const lid = new THREE.Mesh(new THREE.CircleGeometry(r * 1.8, 14).rotateX(-Math.PI / 2), grassMat);
       lid.position.set(x, top + 0.05, z); this.group.add(lid);
+      this.marks.spires.push([x, z, r * 1.8]);
       this.world.addPillar(x, z, base, top, r * 0.9, 0.15);
       this.world.addPillar(x, z, top - 6, top, r * 1.7, 0.15);
     }
@@ -306,6 +332,7 @@ export class Planet {
       m.compose(new THREE.Vector3(s.x, s.y - 0.5, s.z), new THREE.Quaternion(), new THREE.Vector3(s.r, s.h, s.r));
       mesh.setMatrixAt(i, m); mesh.setColorAt(i, col.set(palette[s.c]));
       this.world.addCylinder(s.x, s.z, s.y - 0.5, s.y + s.h * 0.8, s.r * 0.5, 0.05);
+      if (i % 3 === 0) this.marks.crystals.push([s.x, s.z]);
     });
     this.group.add(mesh);
   }
@@ -424,6 +451,7 @@ export class Planet {
     this.updateFireflies(night, follow);
     this.updateAnimals(dt, follow, head);
     this.updatePod(dt, night);
+    this.updateFalling(dt);
   }
 
   private updateFireflies(night: number, follow: THREE.Vector3): void {
@@ -454,20 +482,32 @@ export class Planet {
       an.group.visible = !far;
       if (far && !an.flying) continue; // freeze distant ground animals
 
+      // ---- attention span: it studies you for a while, then looks away for a while ----
+      const lk = an.look;
+      lk.timer -= dt;
+      if (d >= 45) { lk.away = false; lk.timer = Math.max(lk.timer, 2); }
+      else if (lk.timer <= 0) {
+        lk.away = !lk.away;
+        if (lk.away) { lk.timer = 3 + Math.random() * 5; lk.ay = (Math.random() > 0.5 ? 1 : -1) * (0.6 + Math.random() * 0.7); lk.ap = (Math.random() - 0.7) * 0.5; }
+        else lk.timer = 4 + Math.random() * 6;
+      }
+      const attentive = !lk.away;
+
       // ---- how it reacts to you ----
       const want = Math.atan2(dx, dz);            // heading that points at you
       const delta = wrap(want - an.heading);      // >0: you're on its +heading side
       let steer: number | null = null, speedMul = 1;
       switch (an.mood) {
         case 'curious':
+          if (!attentive && d > 6) break;                                // lost interest: carries on
           if (an.flying) { if (d < 45 && d > 10) { steer = want; speedMul = 0.6; } else if (d <= 10) { steer = want; speedMul = 0; } }
           else if (d < 22 && d > 6) { steer = want; speedMul = 0; }       // stops to study you
           else if (d <= 6) { steer = want + Math.PI; speedMul = 0.8; }    // too close: backs away
           break;
         case 'shy': if (d < 28) { steer = want + Math.PI; speedMul = 1.6; } break;
         case 'skittish': if (d < (an.flying ? 25 : 14)) { steer = want + Math.PI; speedMul = 2; } break;
-        case 'defensive': if (d < 18) { steer = want; speedMul = 0; } break;
-        case 'friendly': if (d < 40) { steer = want + (d < 5 ? 1.5 : 0); speedMul = d < 3 ? 0.3 : 1.2; } break;
+        case 'defensive': if (d < 18 && (attentive || d < 8)) { steer = want; speedMul = 0; } break;
+        case 'friendly': if (d < 40 && attentive) { steer = want + (d < 5 ? 1.5 : 0); speedMul = d < 3 ? 0.3 : 1.2; } break;
         default: break;
       }
       // Walk into its path and it goes around you.
@@ -515,13 +555,67 @@ export class Planet {
       // ---- head follows you ----
       if (an.head) {
         const near = d < 45;
-        const ty = near ? THREE.MathUtils.clamp(delta, -1.3, 1.3) : 0;
-        const tp = near ? THREE.MathUtils.clamp(Math.atan2(head.y - (p.y + (an.flying ? 0 : 1.8)), d), -0.6, 0.6) : 0;
+        let ty = near ? THREE.MathUtils.clamp(delta, -1.3, 1.3) : 0;
+        let tp = near ? THREE.MathUtils.clamp(Math.atan2(head.y - (p.y + (an.flying ? 0 : 1.8)), d), -0.6, 0.6) : 0;
+        if (near && !attentive) { ty = lk.ay; tp = lk.ap; }                 // looks away
         const k = Math.min(1, dt * 4);
         an.look.yaw += (ty - an.look.yaw) * k; an.look.pitch += (tp - an.look.pitch) * k;
         an.head.rotation.y = an.look.yaw;
         if (an.yawOnly) an.head.rotation.x += -0.4 * env;   // neck rears back to roar
         else an.head.rotation.x = -an.look.pitch * 0.8 - 0.5 * env;
+      }
+    }
+  }
+
+  /** Live data for the map. */
+  get trees(): readonly TreeRec[] { return this.treeRecs; }
+  get creatures(): readonly Animal[] { return this.animals; }
+  get podPosition(): THREE.Vector3 | null { return this.pod ? this.pod.position : null; }
+
+  /**
+   * Knock a tree down, away from `from`. It tips over in a second, lies there, and after 3 s
+   * vanishes and `onWood` fires. Returns false if it was already felled.
+   */
+  fellTree(id: number, from: THREE.Vector3): boolean {
+    const rec = this.treeRecs[id];
+    if (!rec || rec.felled) return false;
+    rec.felled = true;
+    this.world.removeOwner(id);
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    this.trunkMesh.setMatrixAt(rec.trunkIdx, zero); this.trunkMesh.instanceMatrix.needsUpdate = true;
+    const fol = rec.pine ? this.pineMesh : this.canopyMesh;
+    fol.setMatrixAt(rec.foliageIdx, zero); fol.instanceMatrix.needsUpdate = true;
+
+    const group = new THREE.Group(); group.position.set(rec.x, rec.y, rec.z);
+    const trunk = new THREE.Mesh(this.trunkMesh.geometry, this.trunkMesh.material);
+    trunk.matrixAutoUpdate = false; trunk.matrix.copy(rec.trunkLocal);
+    const leaves = new THREE.Mesh(fol.geometry, new THREE.MeshStandardMaterial({ color: rec.color, roughness: 0.75, flatShading: rec.pine }));
+    leaves.matrixAutoUpdate = false; leaves.matrix.copy(rec.foliageLocal);
+    group.add(trunk, leaves);
+    this.group.add(group);
+
+    const f = new THREE.Vector3(rec.x - from.x, 0, rec.z - from.z);
+    if (f.lengthSq() < 1e-6) f.set(0, 0, -1);
+    f.normalize();
+    // rotating about (f.z, 0, -f.x) tips the tree's up-vector toward f
+    this.falling.push({ rec, group, t: 0, axis: new THREE.Vector3(f.z, 0, -f.x), landed: false });
+    return true;
+  }
+
+  private updateFalling(dt: number): void {
+    for (let i = this.falling.length - 1; i >= 0; i--) {
+      const f = this.falling[i];
+      f.t += dt;
+      const k = Math.min(f.t / 1.0, 1);
+      const bounce = f.t > 1 ? 0.07 * Math.max(0, 1 - (f.t - 1) * 4) * Math.abs(Math.sin((f.t - 1) * 18)) : 0;
+      f.group.quaternion.setFromAxisAngle(f.axis, (Math.PI / 2) * k * k - bounce);
+      f.group.position.y = f.rec.y + 0.35 * k * k;
+      if (f.t >= 1 && !f.landed) { f.landed = true; this.onTreeLanded?.(new THREE.Vector3(f.rec.x, f.rec.y, f.rec.z)); }
+      if (f.t >= 3) { // gone after 3 s: hand over the wood
+        this.group.remove(f.group);
+        ((f.group.children[1] as THREE.Mesh).material as THREE.Material).dispose();
+        this.falling.splice(i, 1);
+        this.onWood?.(Math.max(2, Math.round(f.rec.h / 3)) + (f.rec.pine ? 1 : 0), new THREE.Vector3(f.rec.x, f.rec.y + 2, f.rec.z));
       }
     }
   }

@@ -110,5 +110,26 @@ function swipe(slip: number): number {
   check('legless torso rests on a hillside', hy > 0.5 && hy < 0.95, `head ${hy.toFixed(2)} m above ground`);
 }
 
+// 8. Punching a tree: hit speed, owner lookup, removing a felled tree's colliders
+{
+  const w = new CollisionWorld(); w.hull = false; w.groundY = 0;
+  w.addCylinder(0, 0, 0, 8, 0.4, 0, 7);
+  w.addSphere(V(0, 9, 0), 2, 0.2, 7);
+  w.addCylinder(20, 0, 0, 8, 0.4, 0, 8);
+  w.finalize();
+  check('ownerAt finds the tree trunk', w.ownerAt(V(0.5, 3, 0)) === 7 && w.ownerAt(V(20.5, 3, 0)) === 8);
+  const p = new GorillaPlayer(w, settings());
+  p.teleport(V(-3, 0, 0));
+  const slow = [V(1.8, 1.0, 0), V(-0.3, 0.5, 0)];
+  for (let i = 0; i < 5; i++) p.update(dt, head, slow);
+  const hh = [V(1.8, 1.0, 0), V(-0.3, 0.5, 0)];
+  let hit = 0, best = 0;
+  for (let i = 0; i < 16; i++) { hh[0].x += 0.06; p.update(dt, head, hh); if (p.hands[0].started) { hit = p.hands[0].impact; best = Math.max(best, hit); } }
+  check('a fast punch registers a high impact speed', best > 2.2, `impact ${best.toFixed(1)} m/s`);
+  w.removeOwner(7);
+  check('felled tree stops being solid', w.ownerAt(V(0.5, 3, 0)) !== 7 && w.distance(V(0.4, 3, 0)) > 1);
+  check('other trees stay solid', w.ownerAt(V(20.5, 3, 0)) === 8);
+}
+
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');
 process.exit(failed ? 1 : 0);

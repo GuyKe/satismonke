@@ -19,6 +19,8 @@ class Hand {
   world = new THREE.Vector3();     // resolved world position this frame
   touching = false;
   started = false;                 // true on the frame contact begins
+  impact = 0;                      // speed (m/s) the hand hit the surface at, on contact
+  contact = new THREE.Vector3();   // where it touched
   init = false;
 }
 
@@ -81,8 +83,11 @@ export class GorillaPlayer {
       if (!hand.init) {
         hand.prev.copy(wanted); hand.prevLocal.copy(local); hand.init = true;
       }
+      const vel = wanted.clone().sub(hand.prev).divideScalar(dt); // hand velocity this frame
       const hit = this.world.sweep(hand.prev, wanted, HAND_R + SKIN, resolved, nOut);
       if (hit) {
+        hand.impact = Math.max(0, -vel.dot(nOut));
+        hand.contact.copy(resolved);
         // Normal push-out plus grip: tangential hand motion moves the body the other way.
         const shift = resolved.clone().sub(wanted);
         handDelta.copy(local).sub(hand.prevLocal);

@@ -1,0 +1,148 @@
+import * as THREE from 'three';
+import { Screen } from './Screen';
+import { heightAt, pathMask, PONDS, pondY, WATER_Y } from '../world/Terrain';
+import type { Planet } from '../world/Planet';
+
+const W = 640, H = 740;
+const MAP = { x: 20, y: 58, s: 600 };
+const BUTTONS = [
+  { label: '-', x: 20, w: 190 }, { label: '+', x: 225, w: 190 }, { label: 'Close', x: 430, w: 190 },
+];
+const BTN_Y = 670, BTN_H = 56;
+const ZOOMS = [150, 350, 800]; // half-width of the map in metres
+const RES = 150;               // terrain sample grid
+
+const lerp = (a: number[], b: number[], t: number): number[] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const clamp01 = (x: number) => Math.min(Math.max(x, 0), 1);
+
+/** Top-down map of the planet, opened with the A button. North (top) is toward the lake (-z). */
+export class MapMenu extends Screen {
+  private zoom = 1;
+  private hovered = new Map<number, number>();
+  private base = document.createElement('canvas');
+  private baseCtx: CanvasRenderingContext2D;
+  private timer = 1;
+  private dirty = true;
+
+  constructor(private onClose: () => void) {
+    super(0.9, 0.9 * H / W, W, H);
+    this.base.width = this.base.height = RES;
+    this.baseCtx = this.base.getContext('2d')!;
+  }
+
+  private pick(uv: THREE.Vector2 | null): number {
+    if (!uv) return -1;
+    const px = uv.x * W, py = (1 - uv.y) * H;
+    if (py < BTN_Y || py > BTN_Y + BTN_H) return -1;
+    return BUTTONS.findIndex(b => px >= b.x && px <= b.x + b.w);
+  }
+
+  hover(pointer: number, uv: THREE.Vector2 | null): boolean {
+    const i = this.pick(uv);
+    if (i !== (this.hovered.get(pointer) ?? -1)) { this.hovered.set(pointer, i); this.dirty = true; }
+    return i >= 0;
+  }
+
+  click(pointer: number): boolean {
+    const i = this.hovered.get(pointer) ?? -1;
+    if (i < 0) return false;
+    if (i === 0) this.zoom = Math.min(ZOOMS.length - 1, this.zoom + 1);   // "-" zooms out
+    else if (i === 1) this.zoom = Math.max(0, this.zoom - 1);              // "+" zooms in
+    else this.onClose();
+    this.timer = 1; this.dirty = true;
+    return true;
+  }
+
+  zoomBy(dir: number): void { this.zoom = THREE.MathUtils.clamp(this.zoom + dir, 0, ZOOMS.length - 1); this.timer = 1; }
+
+  /** Re-render the terrain layer around (px, pz). */
+  private renderBase(px: number, pz: number): void {
+    const R = ZOOMS[this.zoom];
+    const img = this.baseCtx.createImageData(RES, RES);
+    const pink = [198, 80, 180], violet = [138, 74, 204], sand = [226, 186, 160], shallow = [90, 214, 230], deep = [20, 80, 120];
+    for (let j = 0; j < RES; j++) {
+      for (let i = 0; i < RES; i++) {
+        const wx = px + ((i + 0.5) / RES - 0.5) * 2 * R, wz = pz + ((j + 0.5) / RES - 0.5) * 2 * R;
+        const h = heightAt(wx, wz);
+        let water = h < WATER_Y, depth = clamp01((WATER_Y - h) / 16);
+        if (!water) for (const p of PONDS) if (Math.hypot(wx - p.x, wz - p.z) < p.r * 1.1 && h < pondY(p)) { water = true; depth = 0.2; }
+        let c: number[];
+        if (water) c = lerp(shallow, deep, depth);
+        else {
+          c = lerp(pink, violet, clamp01((h + 2) / 12));
+          if (h < WATER_Y + 1.6) c = lerp(c, sand, 0.8);
+          if (pathMask(wx, wz) > 0.5) c = lerp(c, sand, 0.85);
+          const shade = 1 + THREE.MathUtils.clamp((heightAt(wx + R / RES, wz) - h) * 0.12, -0.25, 0.25); // light from the west
+          c = [c[0] * shade, c[1] * shade, c[2] * shade];
+        }
+        const k = (j * RES + i) * 4;
+        img.data[k] = c[0]; img.data[k + 1] = c[1]; img.data[k + 2] = c[2]; img.data[k + 3] = 255;
+      }
+    }
+    this.baseCtx.putImageData(img, 0, 0);
+  }
+
+  /** Call every frame while open. (px, pz) = player; (fx, fz) = facing direction. */
+  update(dt: number, planet: Planet, px: number, pz: number, fx: number, fz: number): void {
+    this.timer += dt;
+    if (this.timer < 0.25 && !this.dirty) return;
+    if (this.timer >= 0.25 || this.dirty) { this.timer = 0; this.dirty = false; this.draw(planet, px, pz, fx, fz); }
+  }
+
+  private draw(planet: Planet, px: number, pz: number, fx: number, fz: number): void {
+    const ctx = this.ctx, R = ZOOMS[this.zoom], k = MAP.s / (2 * R);
+    this.renderBase(px, pz);
+    ctx.fillStyle = '#0a0f1f'; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 5; ctx.strokeRect(4, 4, W - 8, H - 8);
+    ctx.fillStyle = '#ffb347'; ctx.font = 'bold 34px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('MAP', 22, 44);
+    ctx.font = '20px monospace'; ctx.fillStyle = '#9ab'; ctx.textAlign = 'right';
+    ctx.fillText(`${R * 2} m across   N = lake`, W - 22, 42);
+
+    ctx.save();
+    ctx.beginPath(); ctx.rect(MAP.x, MAP.y, MAP.s, MAP.s); ctx.clip();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(this.base, MAP.x, MAP.y, MAP.s, MAP.s);
+    const X = (wx: number) => MAP.x + MAP.s / 2 + (wx - px) * k, Y = (wz: number) => MAP.y + MAP.s / 2 + (wz - pz) * k;
+
+    ctx.fillStyle = 'rgba(150,140,160,0.95)';
+    for (const [x, z, r] of planet.marks.mesas) { ctx.beginPath(); ctx.arc(X(x), Y(z), Math.max(3, r * k), 0, 7); ctx.fill(); }
+    for (const [x, z, r] of planet.marks.spires) { ctx.beginPath(); ctx.arc(X(x), Y(z), Math.max(3, r * k), 0, 7); ctx.fillStyle = '#d8d0e8'; ctx.fill(); }
+    ctx.fillStyle = '#6ff0ff';
+    for (const [x, z] of planet.marks.crystals) { const sx = X(x), sy = Y(z); ctx.beginPath(); ctx.moveTo(sx, sy - 6); ctx.lineTo(sx + 4, sy); ctx.lineTo(sx, sy + 6); ctx.lineTo(sx - 4, sy); ctx.fill(); }
+    for (const t of planet.trees) { if (t.felled) continue; ctx.fillStyle = t.pine ? '#1f9a7a' : '#46d9b0'; ctx.fillRect(X(t.x) - 2, Y(t.z) - 2, 4, 4); }
+    ctx.fillStyle = '#ffffff';
+    for (const a of planet.creatures) { if (a.group.visible) ctx.fillRect(X(a.group.position.x) - 1.5, Y(a.group.position.z) - 1.5, 3, 3); }
+    const pod = planet.podPosition;
+    if (pod) { ctx.fillStyle = '#ff8a30'; ctx.fillRect(X(pod.x) - 6, Y(pod.z) - 6, 12, 12); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(X(pod.x) - 6, Y(pod.z) - 6, 12, 12); }
+
+    // you
+    ctx.translate(MAP.x + MAP.s / 2, MAP.y + MAP.s / 2);
+    ctx.rotate(Math.atan2(fz, fx));
+    ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-9, 9); ctx.lineTo(-4, 0); ctx.lineTo(-9, -9); ctx.closePath(); ctx.stroke(); ctx.fill();
+    ctx.restore();
+
+    // north marker + frame
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 26px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('N', MAP.x + MAP.s / 2, MAP.y + 28);
+    ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 3; ctx.strokeRect(MAP.x, MAP.y, MAP.s, MAP.s);
+
+    // legend
+    ctx.font = '16px monospace'; ctx.textAlign = 'left';
+    ctx.fillStyle = '#ff8a30'; ctx.fillText('■ pod', MAP.x + 8, MAP.y + MAP.s - 10);
+    ctx.fillStyle = '#6ff0ff'; ctx.fillText('◆ crystals', MAP.x + 80, MAP.y + MAP.s - 10);
+    ctx.fillStyle = '#46d9b0'; ctx.fillText('■ trees', MAP.x + 205, MAP.y + MAP.s - 10);
+    ctx.fillStyle = '#fff'; ctx.fillText('■ creatures', MAP.x + 300, MAP.y + MAP.s - 10);
+
+    const hov = new Set(this.hovered.values());
+    BUTTONS.forEach((b, i) => {
+      ctx.fillStyle = hov.has(i) ? '#ffb347' : '#1c2a4a'; ctx.fillRect(b.x, BTN_Y, b.w, BTN_H);
+      ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 3; ctx.strokeRect(b.x, BTN_Y, b.w, BTN_H);
+      ctx.fillStyle = hov.has(i) ? '#10131f' : '#fff'; ctx.font = 'bold 32px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(b.label, b.x + b.w / 2, BTN_Y + 38);
+    });
+    ctx.textAlign = 'start';
+    this.refresh();
+  }
+}

@@ -18,6 +18,8 @@ npm run test:physics
 - Press Play on the console. Reach scales to your arm span automatically once you have spread your arms wide.
 - Push, swipe and swing your hands against surfaces to move. Release to launch.
 - Menu (console at the front of the capsule): point a controller at it, pull the trigger on Play.
+- On the planet: A opens the map. Hold grip and punch a tree to fell it for wood. In the capsule after Play, B skips to the title.
+- Desktop test keys: M = A, B = B, G (hold) = grip.
 - Debug: add `?skip=planet` to jump to the planet.
 
 ## Layout
