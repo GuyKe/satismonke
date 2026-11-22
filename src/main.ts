@@ -11,6 +11,7 @@ import { Narrator, LINES, Line } from './ui/Narrator';
 import { D } from './ui/dialogue';
 import { Net } from './net/Multiplayer';
 import { RemotePlayers } from './world/RemotePlayers';
+import { PlayerModel } from './world/PlayerModel';
 import { Health, Gear, damagePerSecond, fallDamage } from './game/Hazards';
 import { toWorld } from './world/Hub';
 import { Factory, MachineKind, ITEM_NAME } from './game/Factory';
@@ -457,14 +458,9 @@ async function boot() {
   const lasers = rays.map(r => new LaserPointer(r));
   const hoverTarget: (Interactive | null)[] = [null, null];
   hoverTarget[99] = null;
-  const handMeshes = [0, 1].map(() => {
-    const m = new THREE.Mesh(
-      new THREE.SphereGeometry(player.handRadius, 20, 14),
-      new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.9 }),
-    );
-    scene.add(m); // world space: shows the resolved hand, not the raw controller
-    return m;
-  });
+  // You see your own pioneer: body, arms and fists (no head, it is where your eyes are).
+  const selfModel = new PlayerModel(net.me.color, { head: false });
+  scene.add(selfModel.group);
   const buzz = (i: number, strength: number, ms: number) => {
     const gp = inputs[i]?.gamepad as (Gamepad & { hapticActuators?: { pulse(v: number, d: number): void }[] }) | undefined;
     try { gp?.hapticActuators?.[0]?.pulse(strength, ms); } catch { /* no haptics */ }
@@ -490,12 +486,6 @@ async function boot() {
   });
 
   const arms = new ArmCalibration(settings);
-  const torso = new THREE.Mesh(
-    new THREE.SphereGeometry(0.22, 20, 14).scale(1, 1.35, 0.9),
-    new THREE.MeshStandardMaterial({ color: 0x4a3322, roughness: 0.95 }),
-  );
-  scene.add(torso);
-
   // Buttons (Quest Touch): right A = buttons[4], right B = buttons[5], left X = buttons[4], grip = buttons[1]
   const btn = (i: number, b: number) => !!inputs[i]?.gamepad?.buttons[b]?.pressed;
   const handBtn = (hand: 'left' | 'right', b: number) => [0, 1].some(i => inputs[i]?.handedness === hand && btn(i, b));
@@ -694,12 +684,13 @@ async function boot() {
       player.update(simDt, headStand, [null, null]);
     }
     rig.position.copy(player.position);
-    torso.visible = inXR;
-    torso.position.set(player.position.x + camera.position.x, player.position.y + camera.position.y - 0.45, player.position.z + camera.position.z);
 
+    selfModel.visible = inXR;
+    if (inXR) {
+      const hq = camera.getWorldQuaternion(new THREE.Quaternion()), he = new THREE.Euler().setFromQuaternion(hq, 'YXZ');
+      selfModel.setPose(new THREE.Vector3().copy(player.position).add(camera.position), he.y, he.x, he.z, player.hands[0].world, player.hands[1].world, dt);
+    }
     player.hands.forEach((h, i) => {
-      handMeshes[i].visible = inXR && inputs[i] !== null;
-      handMeshes[i].position.copy(h.world);
       if (h.touching && !hadTouch[i]) buzz(i, 0.35, 25);
       hadTouch[i] = h.touching;
     });

@@ -26,6 +26,14 @@ const ANI = ['Monke', 'Ape', 'Lemur', 'Gibbon', 'Mandrill', 'Macaque', 'Baboon',
 const randName = () => `${ADJ[Math.floor(Math.random() * ADJ.length)]} ${ANI[Math.floor(Math.random() * ANI.length)]}`;
 const pickColor = () => { const h = Math.random() * 360; const c = (n: number) => Math.round(255 * (0.55 + 0.35 * Math.cos(((h + n) * Math.PI) / 180))); return (c(0) << 16) | (c(120) << 8) | c(240); };
 
+/** Your fur colour is picked once and remembered. */
+export function savedColor(): number {
+  try { const v = localStorage.getItem('satismonke.fur'); if (v) return parseInt(v, 10); } catch { /* private mode */ }
+  const c = pickColor();
+  try { localStorage.setItem('satismonke.fur', String(c)); } catch { /* ignore */ }
+  return c;
+}
+
 export function randomCode(): string {
   let s = ''; for (let i = 0; i < CODE_LEN; i++) s += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
   return s;
@@ -41,7 +49,7 @@ export class Net {
   code = '';
   isHost = false;
   myId = '';
-  me: PlayerInfo = { id: '', name: randName(), color: pickColor() };
+  me: PlayerInfo = { id: '', name: randName(), color: savedColor() };
   players = new Map<string, PlayerInfo>();
   onChange: () => void = () => {};
   onStart: (clock: number) => void = () => {};

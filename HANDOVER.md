@@ -176,3 +176,6 @@ NOT verified: anything on a real headset or under IWER. That includes controller
 - `src/world/RemotePlayers.ts`: friends appear as a head, torso, two hands and a name tag.
 - Not shared yet: creatures, felled trees, ores, machines and buildings are simulated per player; inventory/progress is per player. Lobby games are not saved.
 - Test locally without the public broker: run a PeerServer on 127.0.0.1:9000 and open the game with `?peerhost=127.0.0.1&peerport=9000`; `tests/multiplayer.mjs` drives two browsers.
+
+## Player model
+`src/world/PlayerModel.ts` is the original "Monke Pioneer" (fur colour, muzzle, ears, headband + antenna, chest patch, thruster backpack, stretchy arms with knuckle fists), built from primitives. Friends use it in lobbies (`RemotePlayers`) and you see your own body, arms and fists in VR. Your fur colour is picked once and stored in localStorage (`satismonke.fur`).
