@@ -12,11 +12,12 @@ export type Pose = number[];
 
 type Msg =
   | { t: 'hello'; name: string; color: number }
-  | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[] }
+  | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[]; world: [string, number][] }
   | { t: 'join'; p: PlayerInfo }
   | { t: 'leave'; id: string }
   | { t: 'start'; clock: number }
   | { t: 'clock'; clock: number }
+  | { t: 'w'; k: string; i: number }
   | { t: 's'; id: string; p: Pose };
 
 export type NetState = 'off' | 'connecting' | 'lobby' | 'game' | 'error';
@@ -56,6 +57,11 @@ export class Net {
   onClock: (clock: number) => void = () => {};
   onPose: (id: string, p: Pose) => void = () => {};
   onLeave: (id: string) => void = () => {};
+  /** A friend used up a resource (kind, index). */
+  onWorld: (kind: string, i: number) => void = () => {};
+  /** Every resource used up so far in this lobby (for late joiners and the start of the game). */
+  worldLog: [string, number][] = [];
+  private worldSeen = new Set<string>();
   /** Provided by the game: the clock the host shares with everyone. */
   getClock: () => number = () => 0;
 
@@ -115,7 +121,7 @@ export class Net {
 
   leave(quiet = false): void {
     this.peer?.destroy(); this.peer = null; this.conns.clear(); this.players.clear();
-    this.state = 'off'; this.isHost = false; this.code = '';
+    this.state = 'off'; this.isHost = false; this.code = ''; this.worldLog = []; this.worldSeen.clear();
     if (!quiet) this.onChange();
   }
 
@@ -134,9 +140,11 @@ export class Net {
         if (this.players.size >= 8) { c.close(); return; }
         const p: PlayerInfo = { id: c.peer, name: String(m.name).slice(0, 20), color: m.color | 0 };
         this.players.set(p.id, p); this.conns.set(p.id, c);
-        c.send({ t: 'welcome', id: p.id, clock: this.getClock(), started: this.state === 'game', players: this.list } as Msg);
+        c.send({ t: 'welcome', id: p.id, clock: this.getClock(), started: this.state === 'game', players: this.list, world: this.worldLog } as Msg);
         this.broadcast({ t: 'join', p } as Msg, p.id);
         this.onChange();
+      } else if (m.t === 'w') {
+        if (this.logWorld(m.k, m.i)) { this.onWorld(m.k, m.i); this.broadcast(m, c.peer); }
       } else if (m.t === 's') {
         this.onPose(c.peer, m.p);
         this.broadcast({ t: 's', id: c.peer, p: m.p }, c.peer);
@@ -154,6 +162,7 @@ export class Net {
     switch (m.t) {
       case 'welcome':
         this.players.clear(); for (const p of m.players) this.players.set(p.id, p); this.players.set(this.me.id, this.me);
+        for (const [k, i] of m.world ?? []) this.logWorld(k, i);
         this.state = m.started ? 'game' : 'lobby'; this.onChange();
         if (m.started) this.onStart(m.clock);
         break;
@@ -161,8 +170,21 @@ export class Net {
       case 'leave': this.players.delete(m.id); this.onLeave(m.id); this.onChange(); break;
       case 'start': this.state = 'game'; this.onStart(m.clock); this.onChange(); break;
       case 'clock': this.onClock(m.clock); break;
+      case 'w': if (this.logWorld(m.k, m.i)) this.onWorld(m.k, m.i); break;
       case 's': this.onPose(m.id, m.p); break;
     }
+  }
+
+  private logWorld(k: string, i: number): boolean {
+    const key = k + ':' + i; if (this.worldSeen.has(key)) return false;
+    this.worldSeen.add(key); this.worldLog.push([k, i]); return true;
+  }
+
+  /** You used up a resource: remember it and tell everyone. */
+  sendWorld(k: string, i: number): void {
+    if (this.state !== 'game' || !this.logWorld(k, i)) return;
+    const m: Msg = { t: 'w', k, i };
+    if (this.isHost) this.broadcast(m); else if (this.conns.get('host')?.open) this.conns.get('host')!.send(m);
   }
 
   private broadcast(m: Msg, except?: string): void {

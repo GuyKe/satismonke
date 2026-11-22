@@ -147,6 +147,9 @@ const SKY_FRAG = /* glsl */ `
 const hash3 = (x: number, y: number, z: number) => { const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453; return s - Math.floor(s); };
 
 /** The alien planet: rolling hills, lakes, spaced trees, crystals, floating rocks, strange animals, Saturn as the sun. */
+/** Things that can be used up and are shared between players in a lobby. */
+export type Harvest = 'tree' | 'boulder' | 'crystal' | 'ore' | 'site';
+
 export class Planet {
   readonly group = new THREE.Group();
   readonly world = new CollisionWorld();
@@ -214,6 +217,8 @@ export class Planet {
   onStone: ((amount: number, pos: THREE.Vector3) => void) | null = null;
   /** The crashed pod was destroyed. */
   onPodDestroyed: ((pos: THREE.Vector3) => void) | null = null;
+  /** A resource was used up by a local hit (so multiplayer can tell your friends). */
+  onHarvest: ((kind: Harvest, index: number) => void) | null = null;
   private clocks = new Map<Animal, number>();
   private probe = new THREE.Vector3();
   private smoke: THREE.Sprite[] = [];
@@ -719,6 +724,7 @@ export class Planet {
     this.siteMesh.setMatrixAt(i, zero); this.siteLights.setMatrixAt(i, zero);
     this.siteMesh.instanceMatrix.needsUpdate = this.siteLights.instanceMatrix.needsUpdate = true;
     this.onLoot?.(i, s.loot, at);
+    this.onHarvest?.('site', i);
     return 0;
   }
 
@@ -751,6 +757,7 @@ export class Planet {
     this.burst(at, 10, def.color, 0.2, 5);
     const amt = def.yield[0] + Math.floor(Math.random() * (def.yield[1] - def.yield[0] + 1)) + (tool === 'iron' && o.type !== 'plasma' ? 1 : 0);
     this.onOre?.(o.type, amt, at);
+    this.onHarvest?.('ore', i);
     return 0;
   }
 
@@ -1175,6 +1182,7 @@ export class Planet {
     this.crystalMesh.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); this.crystalMesh.instanceMatrix.needsUpdate = true;
     this.burst(at, 10, c.color, 0.25, 5);
     this.onCrystal?.(c.h > 8 ? 2 : 1, at);
+    this.onHarvest?.('crystal', i);
     return 0;
   }
 
@@ -1232,7 +1240,43 @@ export class Planet {
     f.normalize();
     // rotating about (f.z, 0, -f.x) tips the tree's up-vector toward f
     this.falling.push({ rec, group, t: 0, axis: new THREE.Vector3(f.z, 0, -f.x), landed: false });
+    this.onHarvest?.('tree', id);
     return true;
+  }
+
+  /**
+   * A friend used up a resource: remove it here too, quietly (a puff of dust, no loot and no callbacks).
+   * Safe to call twice and for things you already used up yourself.
+   */
+  applyRemote(kind: Harvest, i: number): void {
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    if (kind === 'tree') {
+      const r = this.treeRecs[i]; if (!r || r.felled) return;
+      r.felled = true; this.world.removeOwner(i);
+      this.trunkMesh.setMatrixAt(r.trunkIdx, zero); this.trunkMesh.instanceMatrix.needsUpdate = true;
+      const fol = r.pine ? this.pineMesh : this.canopyMesh; fol.setMatrixAt(r.foliageIdx, zero); fol.instanceMatrix.needsUpdate = true;
+      this.burst(new THREE.Vector3(r.x, r.y + 2, r.z), 6, r.color, 0.2, 4);
+    } else if (kind === 'boulder') {
+      const b = this.boulderRecs[i]; if (!b || b.broken) return;
+      b.broken = true; this.world.removeOwner(BOULDER_OWNER + i);
+      this.boulderMesh.setMatrixAt(i, zero); this.boulderMesh.instanceMatrix.needsUpdate = true;
+      this.burst(new THREE.Vector3(b.x, b.y + b.r * 0.5, b.z), 8, 0x9a90a8, 0.28 * b.r, 5);
+    } else if (kind === 'crystal') {
+      const c = this.crystalRecs[i]; if (!c || c.broken) return;
+      c.broken = true; this.world.removeOwner(CRYSTAL_OWNER + i);
+      this.crystalMesh.setMatrixAt(i, zero); this.crystalMesh.instanceMatrix.needsUpdate = true;
+      this.burst(new THREE.Vector3(c.x, c.y + Math.min(c.h * 0.4, 3), c.z), 8, c.color, 0.25, 5);
+    } else if (kind === 'ore') {
+      const o = this.oreRecs[i]; if (!o || o.broken) return;
+      o.broken = true; this.world.removeOwner(ORE_OWNER + i); this.hideOre(o);
+      this.burst(new THREE.Vector3(o.x, o.y + o.r * 0.6, o.z), 8, ORE_DEF[o.type].color, 0.2, 5);
+    } else {
+      const s = this.siteRecs[i]; if (!s || s.looted) return;
+      s.looted = true; s.discovered = true; this.world.removeOwner(CRASH_OWNER + i);
+      this.siteMesh.setMatrixAt(i, zero); this.siteLights.setMatrixAt(i, zero);
+      this.siteMesh.instanceMatrix.needsUpdate = this.siteLights.instanceMatrix.needsUpdate = true;
+      this.burst(new THREE.Vector3(s.x, s.y + 1, s.z), 10, 0x8a96aa, 0.22, 6);
+    }
   }
 
   // ---------------- stone, pod and hub ----------------
@@ -1273,6 +1317,7 @@ export class Planet {
     this.boulderMesh.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); this.boulderMesh.instanceMatrix.needsUpdate = true;
     this.burst(at, 9, 0x9a90a8, 0.28 * b.r, 5);
     this.onStone?.(Math.max(2, Math.round(b.r * 1.4)), at);
+    this.onHarvest?.('boulder', i);
     return 0;
   }
 

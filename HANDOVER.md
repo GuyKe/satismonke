@@ -179,3 +179,6 @@ NOT verified: anything on a real headset or under IWER. That includes controller
 
 ## Player model
 `src/world/PlayerModel.ts` is the original "Monke Pioneer" in an astronaut suit (furry face in a glass helmet with antenna, white suit with chest panel and accent stripe in your colour, life-support pack with thruster, stretchy arms with gloved fists), built from primitives. Friends use it in lobbies (`RemotePlayers`) and you see your own body, arms and fists in VR. Your fur colour is picked once and stored in localStorage (`satismonke.fur`).
+
+## Shared resources and friends on the map
+Trees, boulders, crystals, ores and crashed pods are shared in a lobby: `Planet.onHarvest` fires on a local hit, `Net.sendWorld` relays it through the host, and every other player runs `Planet.applyRemote` (silent removal, no loot). The host keeps `Net.worldLog` and sends it to late joiners; `beginMultiplayer` replays it. Friends show on the map (`MapMenu.friends`) as named dots, or edge arrows with distances when off-map. Machines, buildings, inventory and progress are still per player.
