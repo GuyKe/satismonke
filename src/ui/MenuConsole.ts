@@ -15,15 +15,17 @@ export class MenuConsole extends Screen {
   private buttons: Button[] = [];
   private hovered = new Map<number, number>(); // pointer id -> button index
   private dirty = true;
+  private statusText = '';
 
-  constructor(private settings: Settings, private actions: { resetPosition: () => void }) {
+  constructor(private settings: Settings, private actions: { resetPosition: () => void; calibrateArms: () => void }) {
     super(1.6, 1.0, W, H);
     const cycle = (steps: number[], cur: number) => steps[(steps.indexOf(cur) + 1) % steps.length] ?? steps[0];
-    const bw = 280, bh = 90, gx = 30, top = 110, gy = 20;
+    const bw = 280, bh = 66, gx = 30, top = 108, gy = 14;
     const defs: [() => string, () => void][] = [
       [() => `Gravity: ${this.settings.gravityG}g`, () => { this.settings.gravityG = cycle(GRAVITY_STEPS, this.settings.gravityG); }],
       [() => `Jump power: ${this.settings.jumpMult.toFixed(2)}x`, () => { this.settings.jumpMult = cycle(JUMP_STEPS, this.settings.jumpMult); }],
       [() => `Laser: ${this.settings.laserAlways ? 'always' : 'auto'}`, () => { this.settings.laserAlways = !this.settings.laserAlways; }],
+      [() => 'Calibrate arms', () => this.actions.calibrateArms()],
       [() => 'Reset position', () => this.actions.resetPosition()],
     ];
     defs.forEach(([label, onClick], i) => {
@@ -60,6 +62,8 @@ export class MenuConsole extends Screen {
     return true;
   }
 
+  setStatus(text: string): void { if (text !== this.statusText) { this.statusText = text; this.dirty = true; } }
+
   update(): void { if (this.dirty) this.redraw(); }
 
   private redraw(): void {
@@ -71,13 +75,15 @@ export class MenuConsole extends Screen {
     ctx.fillText('SATISMONKE', 30, 70);
     ctx.font = '20px monospace'; ctx.fillStyle = '#8aa';
     ctx.fillText('point + trigger to select', 34, 98);
+    ctx.font = '22px monospace'; ctx.fillStyle = '#7fe3c1';
+    ctx.fillText(this.statusText, 34, H - 24);
     const hovered = new Set(this.hovered.values());
     this.buttons.forEach((b, i) => {
       ctx.fillStyle = hovered.has(i) ? '#ffb347' : '#1c2a4a';
       ctx.fillRect(b.x, b.y, b.w, b.h);
       ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 3; ctx.strokeRect(b.x, b.y, b.w, b.h);
       ctx.fillStyle = hovered.has(i) ? '#10131f' : '#fff';
-      ctx.font = 'bold 28px monospace';
+      ctx.font = 'bold 26px monospace';
       const text = b.label();
       ctx.fillText(text, b.x + (b.w - ctx.measureText(text).width) / 2, b.y + b.h / 2 + 10);
     });

@@ -1,6 +1,6 @@
 import { Screen } from './Screen';
 
-export interface Telemetry { speed: number; height: number; touching: number; gravityG: number; }
+export interface Telemetry { speed: number; height: number; touching: number; gravityG: number; gripPct: number; }
 
 export class TelemetryScreen extends Screen {
   private acc = 0;
@@ -21,11 +21,12 @@ export class TelemetryScreen extends Screen {
       `HEIGHT  ${t.height.toFixed(1).padStart(5)} m`,
       `HANDS   ${t.touching}/2 in contact`,
       `GRAVITY ${t.gravityG.toFixed(2)} g`,
+      `GRIP    ${String(Math.round(t.gripPct)).padStart(3)} %`,
     ];
-    rows.forEach((r, i) => ctx.fillText(r, 28, 120 + i * 52));
+    rows.forEach((r, i) => ctx.fillText(r, 28, 112 + i * 46));
     // speed bar
-    ctx.fillStyle = '#123'; ctx.fillRect(28, 340, 456, 26);
-    ctx.fillStyle = '#2ee6a6'; ctx.fillRect(28, 340, 456 * Math.min(t.speed / 8, 1), 26);
+    ctx.fillStyle = '#123'; ctx.fillRect(28, 360, 456, 26);
+    ctx.fillStyle = '#2ee6a6'; ctx.fillRect(28, 360, 456 * Math.min(t.speed / 8, 1), 26);
     this.refresh();
   }
 }

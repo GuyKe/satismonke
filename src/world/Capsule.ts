@@ -43,23 +43,26 @@ export function buildCapsule(world: CollisionWorld): THREE.Group {
   // Solid props: each box is both a collider and a mesh
   const propMat = new THREE.MeshStandardMaterial({ color: 0x8a93a8, roughness: 0.6, metalness: 0.4 });
   const accentMat = new THREE.MeshStandardMaterial({ color: 0xff8a2a, roughness: 0.5, metalness: 0.3 });
-  const addBox = (cx: number, cy: number, cz: number, sx: number, sy: number, sz: number, mat = propMat) => {
+  // Surface materials: slip 0 = sticky, 1 = frictionless.
+  const iceMat = new THREE.MeshStandardMaterial({ color: 0x9fdcff, roughness: 0.08, metalness: 0.1, emissive: 0x0a2a44 });
+  const SLIP = { rubber: 0.05, bark: 0.0, metal: 0.4, ice: 0.95 };
+  const addBox = (cx: number, cy: number, cz: number, sx: number, sy: number, sz: number, mat = propMat, slip = SLIP.metal) => {
     const size = new THREE.Vector3(sx, sy, sz);
-    world.addBox(new THREE.Vector3(cx, cy, cz), size);
+    world.addBox(new THREE.Vector3(cx, cy, cz), size, slip);
     const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
     m.position.set(cx, cy, cz);
     root.add(m);
     return m;
   };
 
-  addBox(0, -2.0, 0, 5.2, 0.4, 11, new THREE.MeshStandardMaterial({ map: grid, roughness: 0.9 })); // floor, top at y=-1.8
+  addBox(0, -2.0, 0, 5.2, 0.4, 11, new THREE.MeshStandardMaterial({ map: grid, roughness: 0.9 }), SLIP.rubber); // floor, top at y=-1.8
   addBox(0, -1.05, -3.6, 1.9, 1.5, 0.4);       // menu console pedestal (front face z=-3.4)
-  addBox(-1.6, -1.45, 1.0, 0.8, 0.7, 0.8, accentMat); // crates
-  addBox(1.7, -1.35, -0.5, 0.9, 0.9, 0.9, accentMat);
-  addBox(0.8, -1.55, 3.4, 0.6, 0.5, 0.6, accentMat);
-  addBox(0, 0.4, 0.5, 5.4, 0.1, 0.1, ribMat);  // monkey bars to push off
-  addBox(0, 0.9, -1.8, 5.4, 0.1, 0.1, ribMat);
-  addBox(0, 0.2, 3.0, 5.4, 0.1, 0.1, ribMat);
+  addBox(-1.6, -1.45, 1.0, 0.8, 0.7, 0.8, accentMat, SLIP.bark); // grippy crates
+  addBox(1.7, -1.35, -0.5, 0.9, 0.9, 0.9, iceMat, SLIP.ice);      // ice block
+  addBox(0.8, -1.55, 3.4, 0.6, 0.5, 0.6, accentMat, SLIP.bark);
+  addBox(0, 0.4, 0.5, 5.4, 0.1, 0.1, ribMat, SLIP.metal);  // bars to push off
+  addBox(0, 0.9, -1.8, 5.4, 0.1, 0.1, iceMat, SLIP.ice);
+  addBox(0, 0.2, 3.0, 5.4, 0.1, 0.1, accentMat, SLIP.bark);
 
   // Lights
   root.add(new THREE.HemisphereLight(0xbfd4ff, 0x20242e, 1.1));

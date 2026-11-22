@@ -6,6 +6,7 @@ import { buildCapsule } from './world/Capsule';
 import { MenuConsole } from './ui/MenuConsole';
 import { TelemetryScreen } from './ui/TelemetryScreen';
 import { LaserPointer } from './ui/LaserPointer';
+import { ArmCalibration } from './player/ArmCalibration';
 import { loadSettings } from './settings';
 
 async function boot() {
@@ -43,7 +44,8 @@ async function boot() {
   scene.add(rig);
 
   // Menu console + side screens
-  const menu = new MenuConsole(settings, { resetPosition: () => player.teleport(SPAWN) });
+  const arms = new ArmCalibration(settings);
+  const menu = new MenuConsole(settings, { resetPosition: () => player.teleport(SPAWN), calibrateArms: () => arms.start() });
   menu.mesh.position.set(0, -0.8, -3.38);
   scene.add(menu.mesh);
 
@@ -93,7 +95,15 @@ async function boot() {
     renderer.setSize(innerWidth, innerHeight);
   });
 
-  const hl = [new THREE.Vector3(), new THREE.Vector3()];
+  // Legless torso under the head (visual only; the collider lives in GorillaPlayer)
+  const torso = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 20, 14).scale(1, 1.35, 0.9),
+    new THREE.MeshStandardMaterial({ color: 0x4a3322, roughness: 0.95 }),
+  );
+  scene.add(torso);
+
+  const hl = [new THREE.Vector3(), new THREE.Vector3()];   // raw controller positions
+  const sl = [new THREE.Vector3(), new THREE.Vector3()];   // arm-span-scaled, fed to physics
   const hadTouch = [false, false];
   const clock = new THREE.Clock();
 
@@ -103,10 +113,12 @@ async function boot() {
 
     if (inXR) {
       // In XR, three updates camera + controller transforms (rig-local) before this callback.
-      const handLocals = [0, 1].map(i => {
+      const raw = [0, 1].map(i => {
         const connected = inputs[i] !== null && grips[i].position.lengthSq() > 0;
         return connected ? hl[i].copy(grips[i].position) : null;
       });
+      arms.update(dt, raw[0], raw[1]);
+      const handLocals = raw.map((r, i) => (r ? arms.apply(camera.position, r, sl[i]) : null));
       player.update(dt, camera.position, handLocals);
     } else {
       camera.position.copy(headStand);
@@ -114,6 +126,9 @@ async function boot() {
       player.update(dt, headStand, [null, null]);
     }
     rig.position.copy(player.position);
+    torso.visible = inXR;
+    torso.position.set(player.position.x + camera.position.x, player.position.y + camera.position.y - 0.45, player.position.z + camera.position.z);
+    menu.setStatus(arms.status());
 
     // Resolved hand spheres + haptics on first contact
     player.hands.forEach((h, i) => {
@@ -138,6 +153,7 @@ async function boot() {
       height: player.position.y + (inXR ? camera.position.y : 1.6) + 3,
       touching: player.hands.filter(h => h.touching).length,
       gravityG: settings.gravityG,
+      gripPct: (1 - player.lastSlip) * 100,
     });
 
     renderer.render(scene, camera);

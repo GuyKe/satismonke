@@ -6,8 +6,10 @@ const G = 9.81;
 const HAND_R = 0.07;
 const HEAD_R = 0.14;
 const SKIN = 0.003;
+// The avatar is a floating head + torso + hands: no legs. The torso hangs under the head, so
+// there is nothing to stand or walk on; you rest on the floor and only hands move you.
 const BODY_R = 0.25;
-const BODY_H = 0.25; // body sphere centre above the play-space floor
+const BODY_DROP = 0.45; // torso centre below the head
 const HISTORY = 6;
 const MAX_DT = 1 / 30;
 
@@ -33,6 +35,8 @@ export class GorillaPlayer {
   readonly handRadius = HAND_R;
 
   private history: THREE.Vector3[] = [];
+  /** Slip of the surface most recently touched by a hand (for the HUD). */
+  lastSlip = 0;
   private touchedLast = false;
   private n = new THREE.Vector3();
 
@@ -80,7 +84,9 @@ export class GorillaPlayer {
         const shift = resolved.clone().sub(wanted);
         handDelta.copy(local).sub(hand.prevLocal);
         handDelta.addScaledVector(nOut, -handDelta.dot(nOut));
-        shift.sub(handDelta);
+        const slip = this.world.slipAt(resolved);
+        this.lastSlip = slip;
+        shift.addScaledVector(handDelta, -(1 - slip)); // slip: how much of the swipe is lost
         this.position.add(shift);
         if (!hand.touching) hand.started = true;
         touching = true;
@@ -99,12 +105,12 @@ export class GorillaPlayer {
       if (into < 0) this.velocity.addScaledVector(nOut, -into);
     }
 
-    // 3b. Body collider under the head so you rest on floors/crates instead of sinking through.
-    const body = new THREE.Vector3(this.position.x + headLocal.x, this.position.y + BODY_H, this.position.z + headLocal.z);
+    // 3b. Legless torso hanging under the head: stops you sinking into floors/crates, but gives
+    //     no way to stand up or walk, so only hand pushes can move you.
+    const body = this.position.clone().add(headLocal);
+    body.y -= BODY_DROP;
     if (this.world.pushOut(body, BODY_R, nOut)) {
-      this.position.x = body.x - headLocal.x;
-      this.position.y = body.y - BODY_H;
-      this.position.z = body.z - headLocal.z;
+      this.position.add(body.sub(this.position).sub(headLocal).add(new THREE.Vector3(0, BODY_DROP, 0)));
       const into = this.velocity.dot(nOut);
       if (into < 0) this.velocity.addScaledVector(nOut, -into);
     }

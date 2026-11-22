@@ -3,6 +3,8 @@ import * as THREE from 'three';
 export interface BoxCollider {
   center: THREE.Vector3;
   half: THREE.Vector3;
+  /** 0 = fully grippy (bark/rubber), 1 = frictionless (ice). */
+  slip: number;
 }
 
 /**
@@ -17,9 +19,10 @@ export class CollisionWorld {
   readonly radius = 3;
   readonly halfSegment = 3; // hull is a segment of 2*3 m capped by r=3 spheres => 12 m long
   readonly boxes: BoxCollider[] = [];
+  hullSlip = 0.35;
 
-  addBox(center: THREE.Vector3, size: THREE.Vector3): BoxCollider {
-    const b = { center: center.clone(), half: size.clone().multiplyScalar(0.5) };
+  addBox(center: THREE.Vector3, size: THREE.Vector3, slip = 0.3): BoxCollider {
+    const b = { center: center.clone(), half: size.clone().multiplyScalar(0.5), slip };
     this.boxes.push(b);
     return b;
   }
@@ -37,6 +40,21 @@ export class CollisionWorld {
       if (bd < d) d = bd;
     }
     return d;
+  }
+
+  /** Slip (0..1) of the surface nearest to p. */
+  slipAt(p: THREE.Vector3): number {
+    const z = THREE.MathUtils.clamp(p.z, -this.halfSegment, this.halfSegment);
+    let best = this.radius - Math.hypot(p.x, p.y, p.z - z);
+    let slip = this.hullSlip;
+    for (const b of this.boxes) {
+      const qx = Math.abs(p.x - b.center.x) - b.half.x;
+      const qy = Math.abs(p.y - b.center.y) - b.half.y;
+      const qz = Math.abs(p.z - b.center.z) - b.half.z;
+      const bd = Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qy, qz), 0);
+      if (bd < best) { best = bd; slip = b.slip; }
+    }
+    return slip;
   }
 
   /** Gradient of the distance field: points from solid into free space. */
