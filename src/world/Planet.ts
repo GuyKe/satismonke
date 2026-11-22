@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { CollisionWorld } from '../physics/CollisionWorld';
 import { Animal, makeGround, makeFlyer } from './Animals';
-import { heightAt, buildTerrainMesh, WATER_Y } from './Terrain';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { heightAt, buildTerrainMesh, pathMask, PONDS, LAKE, pondY, WATER_Y } from './Terrain';
 
 export const DAY_SECONDS = 7 * 60;
 export const NIGHT_SECONDS = 5 * 60;
@@ -51,6 +52,7 @@ function saturnTextures(): { body: THREE.CanvasTexture; ring: THREE.CanvasTextur
   return { body, ring };
 }
 
+const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 const hash3 = (x: number, y: number, z: number) => { const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453; return s - Math.floor(s); };
 
 /** The alien planet: rolling hills, lakes, spaced trees, crystals, floating rocks, strange animals, Saturn as the sun. */
@@ -70,7 +72,13 @@ export class Planet {
   private sun = new THREE.DirectionalLight(0xffe2a8, 2);
   private hemi = new THREE.HemisphereLight(0xc9a8ff, 0x7a3a8a, 0.8);
   private animals: Animal[] = [];
-  private trees: { x: number; z: number }[] = [];
+  private clocks = new Map<Animal, number>();
+  private probe = new THREE.Vector3();
+  private smoke: THREE.Sprite[] = [];
+  private pod: THREE.Group | null = null;
+  private podLight: THREE.PointLight | null = null;
+  /** Called when a creature roars, with its position and species. */
+  onRoar: ((pos: THREE.Vector3, kind: string) => void) | null = null;
   private animalTime = 0;
   private tmpCol = new THREE.Color();
   private skyDay = new THREE.Color(0xb79af0);
@@ -82,20 +90,26 @@ export class Planet {
     this.world.hull = false; this.world.heightFn = heightAt; this.world.groundSlip = 0.1;
 
     this.group.add(buildTerrainMesh(groundTexture(rng)));
-    this.water = new THREE.Mesh(
-      new THREE.CircleGeometry(2400, 48).rotateX(-Math.PI / 2),
-      new THREE.MeshStandardMaterial({ color: 0x2ad8d0, emissive: 0x0a6a74, emissiveIntensity: 0.7, transparent: true, opacity: 0.78, roughness: 0.15, metalness: 0.2 }),
-    );
+    const waterMat = new THREE.MeshStandardMaterial({ color: 0x3fd6e6, emissive: 0x0a6a78, emissiveIntensity: 0.6, transparent: true, opacity: 0.8, roughness: 0.15, metalness: 0.2 });
+    this.water = new THREE.Mesh(new THREE.CircleGeometry(2400, 48).rotateX(-Math.PI / 2), waterMat);
     this.water.position.y = WATER_Y;
     this.group.add(this.water);
+    for (const pd of PONDS) {
+      const w = new THREE.Mesh(new THREE.CircleGeometry(pd.r * 1.1, 28).rotateX(-Math.PI / 2), waterMat);
+      w.position.set(pd.x, pondY(pd), pd.z);
+      this.group.add(w);
+    }
 
     this.buildGrass(rng);
     this.buildTrees(rng);
+    this.buildBoulders(rng);
+    this.buildMesas(rng);
     this.buildCrystals(rng);
     this.buildFloatingRocks(rng);
     this.buildMushrooms(rng);
     this.buildMountains(rng);
     this.buildAnimals(rng);
+    this.world.finalize();
 
     // Fireflies (visible at night)
     this.ffSeeds = new Float32Array(260 * 3).map(() => rng() * 100);
@@ -136,7 +150,7 @@ export class Planet {
     for (let i = 0; i < 60; i++) {
       const a = rng() * Math.PI * 2, r = rMin + rng() * (rMax - rMin);
       const x = Math.cos(a) * r, z = Math.sin(a) * r, h = heightAt(x, z);
-      if (h > minH) return { x, z, h };
+      if (h > minH && pathMask(x, z) < 0.5) return { x, z, h };
     }
     return { x: rMin, z: 0, h: 0 };
   }
@@ -151,7 +165,7 @@ export class Planet {
     for (let tries = 0; n < N && tries < N * 2; tries++) {
       const a = rng() * Math.PI * 2, r = 1.2 + Math.pow(rng(), 1.5) * 120;
       const x = Math.cos(a) * r, z = Math.sin(a) * r, y = heightAt(x, z);
-      if (y < ABOVE_WATER - 0.4) continue;
+      if (y < ABOVE_WATER - 0.4 || pathMask(x, z) > 0.3) continue;
       e.set((rng() - 0.5) * 0.4, rng() * 6.28, (rng() - 0.5) * 0.4);
       const s = 0.55 + rng() * 0.6;
       m.compose(new THREE.Vector3(x, y, z), q.setFromEuler(e), new THREE.Vector3(s, s * (0.8 + rng() * 0.5), s));
@@ -163,32 +177,114 @@ export class Planet {
     this.group.add(mesh);
   }
 
+  /** Clusters of alien trees across the plains, plus a few loners. Trees stay at least 9 m apart. */
   private buildTrees(rng: () => number): void {
-    const trunkGeo = new THREE.CylinderGeometry(0.3, 0.46, 1, 8).translate(0, 0.5, 0);
-    const canopyGeo = new THREE.SphereGeometry(1, 16, 12);
-    const spots: { x: number; z: number; y: number; h: number; cr: number; c: number }[] = [];
-    for (let tries = 0; tries < 1200 && spots.length < 52; tries++) {
-      const p = this.dryPoint(rng, 14, 170, ABOVE_WATER + 0.5);
-      if (spots.some(s => Math.hypot(s.x - p.x, s.z - p.z) < 15)) continue; // keep trees separated
-      spots.push({ x: p.x, z: p.z, y: p.h, h: 6 + rng() * 5, cr: 2.2 + rng() * 1.4, c: Math.floor(rng() * 4) });
+    type Spot = { x: number; z: number; y: number; h: number; cr: number; c: number; pine: boolean };
+    const spots: Spot[] = [];
+    const tryAdd = (x: number, z: number, gap = 9): boolean => {
+      const y = heightAt(x, z);
+      if (y < ABOVE_WATER + 0.5 || Math.hypot(x, z) < 14 || pathMask(x, z) > 0.4) return false;
+      if (spots.some(t => Math.hypot(t.x - x, t.z - z) < gap)) return false;
+      spots.push({ x, z, y, h: 6 + rng() * 6, cr: 2.2 + rng() * 1.4, c: Math.floor(rng() * 4), pine: rng() < 0.45 });
+      return true;
+    };
+    for (let k = 0; k < 18; k++) {
+      const c = this.dryPoint(rng, 35, 200, ABOVE_WATER + 0.5);
+      const n = 3 + Math.floor(rng() * 6);
+      for (let t = 0, added = 0; t < 40 && added < n; t++) {
+        const a = rng() * Math.PI * 2, d = rng() * 28;
+        if (tryAdd(c.x + Math.cos(a) * d, c.z + Math.sin(a) * d)) added++;
+      }
     }
-    const trunks = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x9a8fb8, roughness: 0.95 }), spots.length);
-    const canopies = new THREE.InstancedMesh(canopyGeo, new THREE.MeshStandardMaterial({ roughness: 0.7 }), spots.length);
-    const palette = [0x2fd1c1, 0xff6fb5, 0xffa940, 0x7d6bff];
-    const m = new THREE.Matrix4(), col = new THREE.Color();
-    spots.forEach((s, i) => {
-      const w = s.h * 0.1 + 0.6;
-      m.compose(new THREE.Vector3(s.x, s.y - 1.5, s.z), new THREE.Quaternion(), new THREE.Vector3(w, s.h + 1.5, w)); // sunk in so slopes don't show a gap
-      trunks.setMatrixAt(i, m);
-      const cy = s.y + s.h + s.cr * 0.35;
-      m.compose(new THREE.Vector3(s.x, cy, s.z), new THREE.Quaternion(), new THREE.Vector3(s.cr, s.cr * 0.8, s.cr));
-      canopies.setMatrixAt(i, m);
-      canopies.setColorAt(i, col.set(palette[s.c]));
-      this.world.addCylinder(s.x, s.z, s.y - 1.5, s.y + s.h, w * 0.38, 0);        // bark: grippy
-      this.world.addSphere(new THREE.Vector3(s.x, cy, s.z), s.cr * 0.85, 0.2);     // leafy canopy
-      this.trees.push({ x: s.x, z: s.z });
+    for (let k = 0; k < 40 && spots.length < 110; k++) { const p = this.dryPoint(rng, 18, 200); tryAdd(p.x, p.z, 14); }
+
+    const pineGeo = mergeGeometries([
+      new THREE.ConeGeometry(1.0, 0.5, 8).translate(0, 0.25, 0),
+      new THREE.ConeGeometry(0.75, 0.45, 8).translate(0, 0.55, 0),
+      new THREE.ConeGeometry(0.5, 0.4, 8).translate(0, 0.82, 0),
+    ].map(g => g.toNonIndexed()))!;
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x9a8fb8, roughness: 0.95 });
+    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.3, 0.46, 1, 8).translate(0, 0.5, 0), trunkMat, spots.length);
+    const nPine = spots.filter(s => s.pine).length;
+    const canopies = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshStandardMaterial({ roughness: 0.7 }), spots.length - nPine);
+    const pines = new THREE.InstancedMesh(pineGeo, new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true }), nPine);
+    const palette = [0x2fd1c1, 0xff6fb5, 0xffa940, 0x7d6bff], pinePal = [0x38c9a0, 0x9a6bff, 0xff7ac0, 0x4aa8ff];
+    const m = new THREE.Matrix4(), col = new THREE.Color(), q = new THREE.Quaternion();
+    let ci = 0, pi = 0;
+    spots.forEach((t, i) => {
+      if (!t.pine) {
+        const w = t.h * 0.1 + 0.6;
+        m.compose(new THREE.Vector3(t.x, t.y - 1.5, t.z), q, new THREE.Vector3(w, t.h + 1.5, w)); trunks.setMatrixAt(i, m);
+        const cy = t.y + t.h + t.cr * 0.35;
+        m.compose(new THREE.Vector3(t.x, cy, t.z), q, new THREE.Vector3(t.cr, t.cr * 0.8, t.cr));
+        canopies.setMatrixAt(ci, m); canopies.setColorAt(ci++, col.set(palette[t.c]));
+        this.world.addCylinder(t.x, t.z, t.y - 1.5, t.y + t.h, w * 0.38, 0);        // bark: grippy
+        this.world.addSphere(new THREE.Vector3(t.x, cy, t.z), t.cr * 0.85, 0.2);     // leafy canopy
+      } else {
+        const th = t.h * 0.55, w = 0.8, fh = t.h * 1.0, rad = t.cr * 0.95;
+        m.compose(new THREE.Vector3(t.x, t.y - 1.5, t.z), q, new THREE.Vector3(w, th + 1.5, w)); trunks.setMatrixAt(i, m);
+        m.compose(new THREE.Vector3(t.x, t.y + th * 0.45, t.z), q, new THREE.Vector3(rad, fh, rad));
+        pines.setMatrixAt(pi, m); pines.setColorAt(pi++, col.set(pinePal[t.c]));
+        this.world.addCylinder(t.x, t.z, t.y - 1.5, t.y + th + 1, w * 0.38, 0);
+        this.world.addSphere(new THREE.Vector3(t.x, t.y + th * 0.45 + fh * 0.3, t.z), rad * 0.5, 0.2);
+        this.world.addSphere(new THREE.Vector3(t.x, t.y + th * 0.45 + fh * 0.62, t.z), rad * 0.3, 0.2);
+      }
     });
-    this.group.add(trunks, canopies);
+    this.group.add(trunks, canopies, pines);
+  }
+
+  /** Round boulders dotted over the plains: solid and grippy-ish. */
+  private buildBoulders(rng: () => number): void {
+    const N = 70;
+    const mesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ roughness: 0.95, flatShading: true }), N);
+    const m = new THREE.Matrix4(), col = new THREE.Color();
+    for (let i = 0; i < N; i++) {
+      const p = this.dryPoint(rng, 10, 210), r = 0.9 + Math.pow(rng(), 2) * 4.5;
+      m.compose(new THREE.Vector3(p.x, p.h + r * 0.25, p.z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, rng() * 6, 0)), new THREE.Vector3(r, r * 0.7, r * (0.8 + rng() * 0.4)));
+      mesh.setMatrixAt(i, m); mesh.setColorAt(i, col.setHSL(0.74 + rng() * 0.08, 0.12, 0.36 + rng() * 0.2));
+      this.world.addSphere(new THREE.Vector3(p.x, p.h + r * 0.3, p.z), r * 0.78, 0.3);
+    }
+    this.group.add(mesh);
+  }
+
+  /** Flat-topped mesas and tall mushroom-capped spires standing in the lake. */
+  private buildMesas(rng: () => number): void {
+    const band = [new THREE.Color(0x8a6a9a), new THREE.Color(0xb08ab8), new THREE.Color(0x6a4f86), new THREE.Color(0xc4a0b0)];
+    const rockMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true });
+    const grassMat = new THREE.MeshStandardMaterial({ color: 0xb25ac8, roughness: 1 });
+    const BASE = -32;
+    const rock = (rTop: number, rBot: number, base: number, top: number, seg = 22): THREE.Mesh => {
+      const H = top - base;
+      const g = new THREE.CylinderGeometry(rTop, rBot, H, seg, Math.max(6, Math.round(H / 5)), true).translate(0, base + H / 2, 0);
+      const p = g.attributes.position, col: number[] = [], c = new THREE.Color();
+      for (let i = 0; i < p.count; i++) {
+        const x = p.getX(i), y = p.getY(i), z = p.getZ(i), j = 1 + (hash3(x, y, z) - 0.5) * 0.12;
+        p.setXYZ(i, x * j, y, z * j);
+        const k = Math.max(0, Math.floor((y - base) / 3.2));
+        c.copy(band[k % 4]).lerp(band[(k + 1) % 4], 0.25).multiplyScalar(0.9 + hash3(k, 1, 2) * 0.2);
+        col.push(c.r, c.g, c.b);
+      }
+      g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      g.computeVertexNormals();
+      return new THREE.Mesh(g, rockMat);
+    };
+    // x, z, radius, top height
+    for (const [x, z, r, top] of [[-110, -430, 38, 9], [90, -500, 52, 12], [-30, -610, 44, 8], [170, -640, 36, 10], [-190, -650, 48, 14], [40, -450, 26, 6]]) {
+      const m = rock(r * 0.9, r * 1.1, BASE, top); m.position.set(x, 0, z); this.group.add(m);
+      const cap = new THREE.Mesh(new THREE.CircleGeometry(r * 0.9, 24).rotateX(-Math.PI / 2), grassMat);
+      cap.position.set(x, top + 0.05, z); this.group.add(cap);
+      this.world.addPillar(x, z, BASE, top, r * 0.95, 0.15);
+    }
+    // spires like a giant stone mushroom: x, z, radius, height above the water
+    for (const [x, z, r, hgt] of [[-45, -520, 7, 70], [120, -560, 9, 90], [-140, -300, 6, 55], [60, -235, 6, 48]]) {
+      const base = Math.min(BASE, heightAt(x, z) - 2), top = Math.max(heightAt(x, z), WATER_Y) + hgt;
+      const m = rock(r * 0.8, r * 1.15, base, top, 12); m.position.set(x, 0, z); this.group.add(m);
+      const cap = rock(r * 1.8, r * 1.5, top - 6, top, 14); cap.position.set(x, 0, z); this.group.add(cap);
+      const lid = new THREE.Mesh(new THREE.CircleGeometry(r * 1.8, 14).rotateX(-Math.PI / 2), grassMat);
+      lid.position.set(x, top + 0.05, z); this.group.add(lid);
+      this.world.addPillar(x, z, base, top, r * 0.9, 0.15);
+      this.world.addPillar(x, z, top - 6, top, r * 1.7, 0.15);
+    }
   }
 
   /** Glowing crystal spires you can climb. */
@@ -268,7 +364,7 @@ export class Planet {
       return g;
     };
     for (let i = 0; i < 34; i++) {
-      const a = (i / 34) * Math.PI * 2 + rng() * 0.15, r = 800 + rng() * 1100, h = 220 + rng() * 520;
+      const a = (i / 34) * Math.PI * 2 + rng() * 0.15, r = 1500 + rng() * 800, h = 260 + rng() * 520;
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       const m = new THREE.Mesh(make(h * (0.55 + rng() * 0.35), h), mat);
       m.position.set(x, heightAt(x, z) - 25, z); m.rotation.y = rng() * 6;
@@ -295,7 +391,7 @@ export class Planet {
   get cycleTime(): number { return this.clock % CYCLE; }
   get isDay(): boolean { return this.cycleTime < DAY_SECONDS; }
 
-  update(dt: number, scene: THREE.Scene, follow: THREE.Vector3): void {
+  update(dt: number, scene: THREE.Scene, follow: THREE.Vector3, head: THREE.Vector3): void {
     this.clock += dt;
     this.animalTime += dt;
 
@@ -326,7 +422,8 @@ export class Planet {
     this.hemi.intensity = 0.3 + 0.9 * day;
 
     this.updateFireflies(night, follow);
-    this.updateAnimals(dt, follow);
+    this.updateAnimals(dt, follow, head);
+    this.updatePod(dt, night);
   }
 
   private updateFireflies(night: number, follow: THREE.Vector3): void {
@@ -344,38 +441,168 @@ export class Planet {
     pos.needsUpdate = true;
   }
 
-  private updateAnimals(dt: number, follow: THREE.Vector3): void {
+  /** Is there open space (no rock, tree or water edge) around this ground point? */
+  private clearAt(x: number, z: number): number {
+    return this.world.distance(this.probe.set(x, heightAt(x, z) + 2.2, z));
+  }
+
+  private updateAnimals(dt: number, follow: THREE.Vector3, head: THREE.Vector3): void {
     for (const an of this.animals) {
       const p = an.group.position;
-      const far = Math.hypot(p.x - follow.x, p.z - follow.z) > 220;
+      const dx = head.x - p.x, dz = head.z - p.z, d = Math.hypot(dx, dz);
+      const far = d > 220;
       an.group.visible = !far;
-      if (far && !an.flying) { /* keep walking logic cheap: freeze far ground animals */ continue; }
+      if (far && !an.flying) continue; // freeze distant ground animals
 
-      if (an.turnBias) an.turn = an.turnBias + (Math.random() - 0.5) * 0.1;
-      else {
+      // ---- how it reacts to you ----
+      const want = Math.atan2(dx, dz);            // heading that points at you
+      const delta = wrap(want - an.heading);      // >0: you're on its +heading side
+      let steer: number | null = null, speedMul = 1;
+      switch (an.mood) {
+        case 'curious':
+          if (an.flying) { if (d < 45 && d > 10) { steer = want; speedMul = 0.6; } else if (d <= 10) { steer = want; speedMul = 0; } }
+          else if (d < 22 && d > 6) { steer = want; speedMul = 0; }       // stops to study you
+          else if (d <= 6) { steer = want + Math.PI; speedMul = 0.8; }    // too close: backs away
+          break;
+        case 'shy': if (d < 28) { steer = want + Math.PI; speedMul = 1.6; } break;
+        case 'skittish': if (d < (an.flying ? 25 : 14)) { steer = want + Math.PI; speedMul = 2; } break;
+        case 'defensive': if (d < 18) { steer = want; speedMul = 0; } break;
+        case 'friendly': if (d < 40) { steer = want + (d < 5 ? 1.5 : 0); speedMul = d < 3 ? 0.3 : 1.2; } break;
+        default: break;
+      }
+      // Walk into its path and it goes around you.
+      if (steer === null && d < 15 && Math.abs(delta) < 0.6) steer = an.heading - Math.sign(delta || 1) * 1.0;
+
+      if (steer !== null) {
+        an.turn = THREE.MathUtils.clamp(wrap(steer - an.heading) * 2, -1.6, 1.6);
+      } else if (an.turnBias) {
+        an.turn = an.turnBias + (Math.random() - 0.5) * 0.1;
+      } else {
         an.turn += (Math.random() - 0.5) * 1.5 * dt;
         an.turn = THREE.MathUtils.clamp(an.turn, -0.6, 0.6) * (1 - 0.5 * dt);
+        if (Math.hypot(p.x, p.z) > 170) an.turn = THREE.MathUtils.clamp(wrap(Math.atan2(-p.x, -p.z) - an.heading), -1, 1);
       }
-      if (Math.hypot(p.x, p.z) > 160) { // steer back toward the middle
-        const want = Math.atan2(-p.x, -p.z);
-        an.turn = THREE.MathUtils.clamp(Math.atan2(Math.sin(want - an.heading), Math.cos(want - an.heading)), -1, 1);
+      if (!an.flying) { // steer around rocks, trunks and lakes
+        const ahead = (a: number) => this.clearAt(p.x + Math.sin(a) * 4, p.z + Math.cos(a) * 4);
+        if (ahead(an.heading) < 1.2 || heightAt(p.x + Math.sin(an.heading) * 5, p.z + Math.cos(an.heading) * 5) < ABOVE_WATER)
+          an.turn = ahead(an.heading + 0.7) > ahead(an.heading - 0.7) ? 1.4 : -1.4;
       }
-      if (!an.flying) {
-        for (const t of this.trees) { // dodge trunks
-          const dx = p.x - t.x, dz = p.z - t.z;
-          if (dx * dx + dz * dz < 16) an.turn += 9.6 * dt * (Math.sin(an.heading) * dz - Math.cos(an.heading) * dx > 0 ? 1 : -1);
-        }
-        // look ahead: turn away from lakes
-        const ax = p.x + Math.sin(an.heading) * 5, az = p.z + Math.cos(an.heading) * 5;
-        if (heightAt(ax, az) < ABOVE_WATER) an.turn = 1.2;
-      }
+
       an.heading += an.turn * dt;
-      p.x += Math.sin(an.heading) * an.speed * dt;
-      p.z += Math.cos(an.heading) * an.speed * dt;
-      const lift = an.tick(this.animalTime) || 0;
+      const sp = an.speed * speedMul;
+      p.x += Math.sin(an.heading) * sp * dt;
+      p.z += Math.cos(an.heading) * sp * dt;
+      const clk = (this.clocks.get(an) ?? 0) + dt * (0.15 + 0.85 * Math.min(speedMul, 1.6)); // legs slow when it stops
+      this.clocks.set(an, clk);
+      const lift = an.tick(clk) || 0;
       const ground = heightAt(p.x, p.z);
       p.y = an.flying ? Math.max(ground, WATER_Y) + an.hover + Math.sin(this.animalTime * 0.6 + an.hover) * 0.8 + lift : ground + lift;
       an.group.rotation.y = an.heading;
+
+      // ---- roars ----
+      const r = an.roar;
+      if (d > 60) r.noticed = false;
+      else if (d < 30 && !r.noticed) { r.noticed = true; r.next = Math.min(r.next, 0.4 + Math.random()); } // roars when it first sees you
+      r.next -= dt;
+      if (r.next <= 0) {
+        r.next = 14 + Math.random() * 28;
+        if (d < 160) { r.timer = 1.4; this.onRoar?.(this.probe.set(p.x, p.y + (an.flying ? 0 : 2), p.z), an.name); }
+      }
+      const env = r.timer > 0 ? Math.sin(Math.PI * (1 - r.timer / 1.4)) : 0;
+      if (r.timer > 0) r.timer -= dt;
+      an.group.scale.setScalar(1 + 0.07 * env);
+
+      // ---- head follows you ----
+      if (an.head) {
+        const near = d < 45;
+        const ty = near ? THREE.MathUtils.clamp(delta, -1.3, 1.3) : 0;
+        const tp = near ? THREE.MathUtils.clamp(Math.atan2(head.y - (p.y + (an.flying ? 0 : 1.8)), d), -0.6, 0.6) : 0;
+        const k = Math.min(1, dt * 4);
+        an.look.yaw += (ty - an.look.yaw) * k; an.look.pitch += (tp - an.look.pitch) * k;
+        an.head.rotation.y = an.look.yaw;
+        if (an.yawOnly) an.head.rotation.x += -0.4 * env;   // neck rears back to roar
+        else an.head.rotation.x = -an.look.pitch * 0.8 - 0.5 * env;
+      }
     }
+  }
+
+  /** Your escape pod, wedged in the ground a few metres behind where you landed. */
+  placePod(head: THREE.Vector3, forward: THREE.Vector3): void {
+    const back = new THREE.Vector3(-forward.x, 0, -forward.z).normalize();
+    const x = head.x + back.x * 4.6, z = head.z + back.z * 4.6, y = heightAt(x, z);
+    const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = Math.atan2(back.x, back.z);
+
+    // scorched crater and churned-up rim
+    const crater = new THREE.Mesh(new THREE.CircleGeometry(2.4, 28).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x241822, roughness: 1 }));
+    crater.position.y = 0.05; g.add(crater);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(2.4, 0.25, 8, 28).rotateX(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x6a4a58, roughness: 1 }));
+    rim.position.y = 0.12; rim.scale.y = 0.6; g.add(rim);
+
+    // hull: capsule ~2.6 m long, 1.7 m wide (a bit bigger than a person), nose-down and half buried
+    const hullGeo = new THREE.CapsuleGeometry(0.85, 0.9, 6, 20).rotateX(Math.PI / 2);
+    const pp = hullGeo.attributes.position, hc: number[] = [], base = new THREE.Color(0xaab2c6), char = new THREE.Color(0x2e2528), c = new THREE.Color();
+    for (let i = 0; i < pp.count; i++) { // soot toward the tail (toward you)
+      c.copy(base).lerp(char, smoothstep(0.2, -1.1, pp.getZ(i)) * 0.9);
+      hc.push(c.r, c.g, c.b);
+    }
+    hullGeo.setAttribute('color', new THREE.Float32BufferAttribute(hc, 3));
+    const hull = new THREE.Group(); hull.position.y = 0.6; hull.rotation.x = 0.32; g.add(hull);
+    hull.add(new THREE.Mesh(hullGeo, new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.6, roughness: 0.45 })));
+    const metal = new THREE.MeshStandardMaterial({ color: 0x6f778c, metalness: 0.7, roughness: 0.4 });
+    for (const z of [-0.7, 0, 0.7]) { const t = new THREE.Mesh(new THREE.TorusGeometry(0.86, 0.035, 6, 24), metal); t.position.z = z; hull.add(t); }
+    const win = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 10).scale(1, 0.55, 1.3), new THREE.MeshStandardMaterial({ color: 0x40e0ff, emissive: 0x30c8ff, emissiveIntensity: 1.3 }));
+    win.position.set(0, 0.7, 0.3); hull.add(win);
+    const hatch = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.7), new THREE.MeshStandardMaterial({ color: 0x3a3a46, metalness: 0.6, roughness: 0.5 }));
+    hatch.position.set(0.95, 0.35, 0.2); hatch.rotation.z = -0.9; hull.add(hatch);        // blown-open hatch
+    for (const a of [0, 2.1, 4.2]) { // tail fins
+      const f = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.7, 0.55), metal);
+      f.position.set(Math.cos(a) * 0.95, Math.sin(a) * 0.95, -1.25); f.rotation.z = a; hull.add(f);
+    }
+    const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.3, 0.3, 14).rotateX(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x2a2428, metalness: 0.5, roughness: 0.6 }));
+    nozzle.position.z = -1.45; hull.add(nozzle);
+    const ember = new THREE.Mesh(new THREE.CircleGeometry(0.2, 14).rotateY(Math.PI), new THREE.MeshBasicMaterial({ color: 0xff7020, toneMapped: false }));
+    ember.position.z = -1.61; hull.add(ember);
+
+    // debris scattered around the impact
+    const debris = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0x4a4a58, metalness: 0.6, roughness: 0.5 }), 16);
+    const m = new THREE.Matrix4(), rr = rngFrom(99);
+    for (let i = 0; i < 16; i++) {
+      const a = rr() * Math.PI * 2, r = 1.8 + rr() * 5, sz = 0.1 + rr() * 0.35;
+      m.compose(new THREE.Vector3(Math.cos(a) * r, sz * 0.3, Math.sin(a) * r), new THREE.Quaternion().setFromEuler(new THREE.Euler(rr() * 3, rr() * 3, rr() * 3)), new THREE.Vector3(sz, sz * 0.5, sz * (1 + rr())));
+      debris.setMatrixAt(i, m);
+    }
+    g.add(debris);
+
+    // smoke plume
+    const sc = document.createElement('canvas'); sc.width = sc.height = 64;
+    const sg = sc.getContext('2d')!, grad = sg.createRadialGradient(32, 32, 2, 32, 32, 30);
+    grad.addColorStop(0, 'rgba(90,80,95,0.9)'); grad.addColorStop(1, 'rgba(90,80,95,0)');
+    sg.fillStyle = grad; sg.fillRect(0, 0, 64, 64);
+    const smokeTex = new THREE.CanvasTexture(sc);
+    for (let i = 0; i < 14; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, transparent: true, depthWrite: false, opacity: 0 }));
+      sp.userData.phase = i / 14; sp.position.set(0, 1, -1.2); g.add(sp); this.smoke.push(sp);
+    }
+    this.podLight = new THREE.PointLight(0xff8a40, 3, 12, 2); this.podLight.position.set(0, 0.8, -1.6); g.add(this.podLight);
+
+    // solid enough to push off
+    const axis = new THREE.Vector3(back.x * Math.cos(0.32), -Math.sin(0.32), back.z * Math.cos(0.32));
+    for (const t of [-0.8, 0, 0.8]) this.world.addSphere(new THREE.Vector3(x, y + 0.6, z).addScaledVector(axis, t), 0.8, 0.3);
+    this.world.finalize();
+    this.pod = g;
+    this.group.add(g);
+  }
+
+  private updatePod(dt: number, night: number): void {
+    if (!this.pod) return;
+    const t = this.animalTime;
+    for (const sp of this.smoke) {
+      const ph = (sp.userData.phase + t * 0.12) % 1; // 0..1 along its life
+      sp.position.set(Math.sin(ph * 6 + sp.userData.phase * 9) * 0.3 + ph * 1.8, 1 + ph * 7, -1.2 + ph * 1.2);
+      const sc = 0.7 + ph * 3.2; sp.scale.set(sc, sc, 1);
+      (sp.material as THREE.SpriteMaterial).opacity = Math.sin(ph * Math.PI) * 0.45;
+    }
+    if (this.podLight) this.podLight.intensity = (2 + night * 3) * (0.8 + 0.2 * Math.sin(t * 17) * Math.sin(t * 5.3));
+    void dt;
   }
 }

@@ -3,7 +3,11 @@ import * as THREE from 'three';
 export interface BoxCollider { center: THREE.Vector3; half: THREE.Vector3; slip: number; }
 export interface SphereCollider { center: THREE.Vector3; radius: number; slip: number; }
 /** Vertical capsule: a trunk from y0 to y1 with radius r. */
+/** Flat-topped cylinder: mesas and rock spires. */
+export interface PillarCollider { x: number; z: number; y0: number; y1: number; radius: number; slip: number; }
 export interface CylinderCollider { x: number; z: number; y0: number; y1: number; radius: number; slip: number; }
+
+const EMPTY_S: SphereCollider[] = [], EMPTY_C: CylinderCollider[] = [], EMPTY_P: PillarCollider[] = [];
 
 /**
  * Collision field. `distance(p)` is the distance to the nearest solid surface (positive in free
@@ -23,6 +27,11 @@ export class CollisionWorld {
   readonly boxes: BoxCollider[] = [];
   readonly spheres: SphereCollider[] = [];
   readonly cylinders: CylinderCollider[] = [];
+  readonly pillars: PillarCollider[] = [];
+  /** Spatial hash for spheres/cylinders/pillars; built by finalize() once a big world is populated. */
+  private grid: Map<number, { s: SphereCollider[]; c: CylinderCollider[]; p: PillarCollider[] }> | null = null;
+  private static readonly CELL = 32;
+  private static readonly MARGIN = 3;
   private slipOut = 0;
 
   addBox(center: THREE.Vector3, size: THREE.Vector3, slip = 0.3): BoxCollider {
@@ -35,6 +44,29 @@ export class CollisionWorld {
   }
   addCylinder(x: number, z: number, y0: number, y1: number, radius: number, slip = 0): void {
     this.cylinders.push({ x, z, y0, y1, radius, slip });
+  }
+
+  addPillar(x: number, z: number, y0: number, y1: number, radius: number, slip = 0.3): void {
+    this.pillars.push({ x, z, y0, y1, radius, slip });
+  }
+
+  /** Build the spatial hash. Call after adding all colliders of a large world. */
+  finalize(): void {
+    const CELL = CollisionWorld.CELL, M = CollisionWorld.MARGIN;
+    const grid = new Map<number, { s: SphereCollider[]; c: CylinderCollider[]; p: PillarCollider[] }>();
+    const key = (i: number, j: number) => i * 65536 + j;
+    const put = (x: number, z: number, r: number, kind: 's' | 'c' | 'p', item: SphereCollider | CylinderCollider | PillarCollider) => {
+      for (let i = Math.floor((x - r - M) / CELL); i <= Math.floor((x + r + M) / CELL); i++)
+        for (let j = Math.floor((z - r - M) / CELL); j <= Math.floor((z + r + M) / CELL); j++) {
+          let cell = grid.get(key(i, j));
+          if (!cell) { cell = { s: [], c: [], p: [] }; grid.set(key(i, j), cell); }
+          (cell[kind] as unknown[]).push(item);
+        }
+    };
+    for (const s of this.spheres) put(s.center.x, s.center.z, s.radius, 's', s);
+    for (const c of this.cylinders) put(c.x, c.z, c.radius, 'c', c);
+    for (const p of this.pillars) put(p.x, p.z, p.radius, 'p', p);
+    this.grid = grid;
   }
 
   /** Evaluates the field and records the slip of the nearest surface in `slipOut`. */
@@ -63,17 +95,24 @@ export class CollisionWorld {
       const bd = Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qy, qz), 0);
       if (bd < d) { d = bd; slip = b.slip; }
     }
-    for (const s of this.spheres) {
-      const dx = p.x - s.center.x;
-      if (dx > d + s.radius + 1 || dx < -(d + s.radius + 1)) continue; // cheap reject
-      const sd = Math.hypot(dx, p.y - s.center.y, p.z - s.center.z) - s.radius;
+    let spheres = this.spheres, cylinders = this.cylinders, pillars = this.pillars;
+    if (this.grid) {
+      const cell = this.grid.get(Math.floor(p.x / CollisionWorld.CELL) * 65536 + Math.floor(p.z / CollisionWorld.CELL));
+      spheres = cell?.s ?? EMPTY_S; cylinders = cell?.c ?? EMPTY_C; pillars = cell?.p ?? EMPTY_P;
+    }
+    for (const s of spheres) {
+      const sd = Math.hypot(p.x - s.center.x, p.y - s.center.y, p.z - s.center.z) - s.radius;
       if (sd < d) { d = sd; slip = s.slip; }
     }
-    for (const c of this.cylinders) {
-      const dx = p.x - c.x;
-      if (dx > d + c.radius + 1 || dx < -(d + c.radius + 1)) continue;
-      const cd = Math.hypot(dx, p.y - THREE.MathUtils.clamp(p.y, c.y0, c.y1), p.z - c.z) - c.radius;
+    for (const c of cylinders) {
+      const cd = Math.hypot(p.x - c.x, p.y - THREE.MathUtils.clamp(p.y, c.y0, c.y1), p.z - c.z) - c.radius;
       if (cd < d) { d = cd; slip = c.slip; }
+    }
+    for (const q of pillars) {
+      const dr = Math.hypot(p.x - q.x, p.z - q.z) - q.radius;
+      const dy = Math.abs(p.y - (q.y0 + q.y1) / 2) - (q.y1 - q.y0) / 2;
+      const pd = Math.min(Math.max(dr, dy), 0) + Math.hypot(Math.max(dr, 0), Math.max(dy, 0));
+      if (pd < d) { d = pd; slip = q.slip; }
     }
     this.slipOut = slip;
     return d;

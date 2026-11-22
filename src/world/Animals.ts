@@ -12,7 +12,17 @@ export interface Animal {
   turnBias: number;    // constant turn (birds circle)
   /** Animate; may return a vertical lift (hops). */
   tick(time: number): number | void;
+  /** Personality drives how it reacts to the player (see Planet.behave). */
+  mood: 'curious' | 'shy' | 'skittish' | 'defensive' | 'wary' | 'friendly';
+  /** Part that turns to look at the player; null = the whole body does the looking. */
+  head: THREE.Object3D | null;
+  /** Neck-style heads only yaw (their tick already animates pitch). */
+  yawOnly: boolean;
+  /** Smoothed head angles and roar bookkeeping, owned by Planet. */
+  look: { yaw: number; pitch: number };
+  roar: { timer: number; next: number; noticed: boolean };
 }
+const base = () => ({ look: { yaw: 0, pitch: 0 }, roar: { timer: 0, next: 8 + Math.random() * 25, noticed: false } });
 
 type Rng = () => number;
 type V3 = [number, number, number];
@@ -115,7 +125,8 @@ function longneck(rng: Rng): Animal {
     eyes(nb, [[-0.22, 3.18, 0.78, 0.1], [0.22, 3.18, 0.78, 0.1], [0, 3.38, 0.7, 0.08]]);
   });
   const ph = rng() * 6;
-  return { name: 'longneck', group: g, speed: 0.9, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+  return { ...base(), mood: 'curious', head: neck, yawOnly: true,
+    name: 'longneck', group: g, speed: 0.9, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
     tick(t) {
       legs.forEach((l, i) => { l.rotation.x = Math.sin(t * 3 + (i % 2 ? Math.PI : 0) + ph) * 0.5; });
       neck.rotation.x = Math.sin(t * 0.8 + ph) * 0.15; neck.rotation.z = Math.sin(t * 0.5 + ph) * 0.12;
@@ -124,15 +135,15 @@ function longneck(rng: Rng): Animal {
 
 function stilter(rng: Rng): Animal {
   const [main, acc, belly] = pick(rng, SCHEMES), g = new THREE.Group();
-  const b = new Builder();
-  b.add(S(0.7, 14, 10), main, { p: [0, 3.7, 0] });
-  for (let i = 0; i < 3; i++) b.add(T(0.62 - Math.abs(i - 1) * 0.15, 0.05), acc, { p: [0, 3.5 + i * 0.22, 0], r: [Math.PI / 2, 0, 0] });
-  for (let i = 0; i < 7; i++) { const a = (i / 7) * Math.PI * 2; b.add(K(0.05, 0.6 + rng() * 0.4, 4), acc, { p: [Math.cos(a) * 0.25, 4.5, Math.sin(a) * 0.25], r: [Math.sin(a) * 0.4, 0, -Math.cos(a) * 0.4] }); }
-  b.add(S(0.34, 12, 10), 0xffffff, { p: [0, 3.8, 0.5], glow: true })
-   .add(S(0.17, 10, 8), 0x2a0050, { p: [0, 3.8, 0.78], glow: true })
-   .add(S(0.07, 6, 5), 0xff80ff, { p: [0.05, 3.85, 0.88], glow: true })
-   .add(S(0.45, 10, 8), belly, { p: [0, 3.25, 0], s: [1, 0.6, 1] });
-  b.into(g);
+  const top = limb(g, [0, 3.7, 0], b => {
+    b.add(S(0.7, 14, 10), main);
+    for (let i = 0; i < 3; i++) b.add(T(0.62 - Math.abs(i - 1) * 0.15, 0.05), acc, { p: [0, -0.2 + i * 0.22, 0], r: [Math.PI / 2, 0, 0] });
+    for (let i = 0; i < 7; i++) { const a = (i / 7) * Math.PI * 2; b.add(K(0.05, 0.6 + rng() * 0.4, 4), acc, { p: [Math.cos(a) * 0.25, 0.8, Math.sin(a) * 0.25], r: [Math.sin(a) * 0.4, 0, -Math.cos(a) * 0.4] }); }
+    b.add(S(0.34, 12, 10), 0xffffff, { p: [0, 0.1, 0.5], glow: true })
+     .add(S(0.17, 10, 8), 0x2a0050, { p: [0, 0.1, 0.78], glow: true })
+     .add(S(0.07, 6, 5), 0xff80ff, { p: [0.05, 0.15, 0.88], glow: true })
+     .add(S(0.45, 10, 8), belly, { p: [0, -0.45, 0], s: [1, 0.6, 1] });
+  });
   const legs = [-0.28, 0.28].map(x => limb(g, [x, 3.2, 0], lb => legBuild(lb, main, acc, 3.2, 0.06, 0.3)));
   const arms = Array.from({ length: 6 }, (_, i) => {
     const a = (i / 6) * Math.PI * 2;
@@ -145,7 +156,8 @@ function stilter(rng: Rng): Animal {
     p.rotation.y = -a; return p;
   });
   const ph = rng() * 6;
-  return { name: 'stilter', group: g, speed: 1.4, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+  return { ...base(), mood: 'shy', head: top, yawOnly: false,
+    name: 'stilter', group: g, speed: 1.4, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
     tick(t) {
       legs.forEach((l, i) => { l.rotation.x = Math.sin(t * 2.2 + i * Math.PI + ph) * 0.45; });
       arms.forEach((a, i) => { a.rotation.z = Math.sin(t * 2 + i + ph) * 0.5 - 0.2; });
@@ -173,10 +185,10 @@ function worm(rng: Rng): Animal {
     eyes(hb, [[-0.2, 0.15, 0.45, 0.1], [0.2, 0.15, 0.45, 0.1]]);
   });
   const ph = rng() * 6;
-  return { name: 'worm', group: g, speed: 0.7, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+  return { ...base(), mood: 'wary', head, yawOnly: false,
+    name: 'worm', group: g, speed: 0.7, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
     tick(t) {
       segs.forEach((s, i) => { s.position.y = 0.5 + Math.sin(t * 3 - i * 0.8 + ph) * 0.14; s.position.x = Math.sin(t * 1.6 - i * 0.5 + ph) * 0.2; });
-      head.rotation.x = Math.sin(t * 2 + ph) * 0.1;
     } };
 }
 
@@ -185,18 +197,20 @@ function hopper(rng: Rng): Animal {
   const [main, acc, belly] = pick(rng, SCHEMES), g = new THREE.Group();
   const b = new Builder();
   b.add(S(0.6, 12, 10), main, { p: [0, 1.0, 0], s: [0.9, 1.15, 1.1], r: [0.4, 0, 0] })
-   .add(S(0.42, 10, 8), belly, { p: [0, 0.95, 0.2], s: [0.9, 1, 0.8] })
-   .add(S(0.36, 10, 8), main, { p: [0, 1.75, 0.35], s: [1, 0.9, 1.1] })
-   .add(S(0.16, 8, 6), acc, { p: [0, 1.65, 0.7], s: [1.1, 0.8, 1] })
-   .add(K(0.14, 1.0), main, { p: [-0.2, 2.4, 0.2], r: [0, 0, 0.25] })
-   .add(K(0.1, 0.7), acc, { p: [-0.2, 2.35, 0.26], r: [0, 0, 0.25] })
-   .add(K(0.14, 1.0), main, { p: [0.2, 2.4, 0.2], r: [0, 0, -0.25] })
-   .add(K(0.1, 0.7), acc, { p: [0.2, 2.35, 0.26], r: [0, 0, -0.25] });
+   .add(S(0.42, 10, 8), belly, { p: [0, 0.95, 0.2], s: [0.9, 1, 0.8] });
   for (let i = 0; i < 5; i++) b.add(S(0.13, 6, 5), acc, { p: [(i % 2 ? 1 : -1) * 0.38, 0.9 + rng() * 0.5, -0.1 + rng() * 0.3], s: [0.4, 1, 1] });
   for (let i = 0; i < 4; i++) b.add(S(0.2 - i * 0.04, 8, 6), main, { p: [0, 0.6 - i * 0.14, -0.7 - i * 0.28] });
   b.add(S(0.17, 8, 6), 0xffe680, { p: [0, 0.1, -1.7], glow: true });
-  eyes(b, [[-0.17, 1.85, 0.62, 0.1], [0.17, 1.85, 0.62, 0.1]]);
   b.into(g);
+  const head = limb(g, [0, 1.7, 0.3], hb => {
+    hb.add(S(0.36, 10, 8), main, { p: [0, 0.05, 0.05], s: [1, 0.9, 1.1] })
+      .add(S(0.16, 8, 6), acc, { p: [0, -0.05, 0.4], s: [1.1, 0.8, 1] })
+      .add(K(0.14, 1.0), main, { p: [-0.2, 0.7, -0.1], r: [0, 0, 0.25] })
+      .add(K(0.1, 0.7), acc, { p: [-0.2, 0.65, -0.05], r: [0, 0, 0.25] })
+      .add(K(0.14, 1.0), main, { p: [0.2, 0.7, -0.1], r: [0, 0, -0.25] })
+      .add(K(0.1, 0.7), acc, { p: [0.2, 0.65, -0.05], r: [0, 0, -0.25] });
+    eyes(hb, [[-0.17, 0.15, 0.32, 0.1], [0.17, 0.15, 0.32, 0.1]]);
+  });
   const hind = [-0.35, 0.35].map(x => limb(g, [x, 0.9, -0.1], lb => {
     lb.add(S(0.28, 8, 6), main, { s: [0.8, 1.2, 1] }).add(C(0.1, 0.07, 0.9), main, { p: [0, -0.5, 0.15], r: [-0.5, 0, 0] })
       .add(S(0.18, 8, 6), acc, { p: [0, -0.95, 0.5], s: [1, 0.5, 2] });
@@ -205,7 +219,8 @@ function hopper(rng: Rng): Animal {
     ab.add(C(0.06, 0.04, 0.55, 5), main, { p: [0, -0.28, 0.1], r: [-0.4, 0, 0] }).add(S(0.07, 6, 5), acc, { p: [0, -0.55, 0.2] });
   }));
   const ph = rng() * 6;
-  return { name: 'hopper', group: g, speed: 2.2, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+  return { ...base(), mood: 'skittish', head, yawOnly: false,
+    name: 'hopper', group: g, speed: 2.2, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
     tick(t) {
       const hop = Math.abs(Math.sin(t * 3 + ph));
       hind.forEach(l => { l.rotation.x = -hop * 0.7 + 0.2; });
@@ -225,10 +240,12 @@ function crawler(rng: Rng): Animal {
     b.add(S(0.28, 6, 5), acc, { p: [Math.cos(a) * rr * 1.2, h - (i < 6 ? 0 : rr * 0.12), Math.sin(a) * rr * 1.4], s: [1, 0.4, 1] });
   }
   b.add(K(0.18, 0.6), acc, { p: [0, 1.95, 0] });
-  b.add(S(0.42, 10, 8), main, { p: [0, 0.75, 1.6], s: [1, 0.85, 1.1] });
-  b.add(C(0.03, 0.03, 0.5, 4), acc, { p: [-0.2, 1.2, 1.8] }).add(C(0.03, 0.03, 0.5, 4), acc, { p: [0.2, 1.2, 1.8] });
-  eyes(b, [[-0.2, 1.5, 1.8, 0.13], [0.2, 1.5, 1.8, 0.13]]);
   b.into(g);
+  const head = limb(g, [0, 0.75, 1.6], hb => {
+    hb.add(S(0.42, 10, 8), main, { s: [1, 0.85, 1.1] })
+      .add(C(0.03, 0.03, 0.5, 4), acc, { p: [-0.2, 0.45, 0.2] }).add(C(0.03, 0.03, 0.5, 4), acc, { p: [0.2, 0.45, 0.2] });
+    eyes(hb, [[-0.2, 0.75, 0.2, 0.13], [0.2, 0.75, 0.2, 0.13]]);
+  });
   const legs = [-1, 0, 1].flatMap(zi => [-1, 1].map(side =>
     limb(g, [side * 1.1, 0.65, zi * 0.8], lb => {
       lb.add(C(0.09, 0.07, 0.7, 5), main, { p: [side * 0.3, -0.1, 0], r: [0, 0, side * 1.1] })
@@ -236,7 +253,8 @@ function crawler(rng: Rng): Animal {
         .add(S(0.1, 6, 5), acc, { p: [side * 0.6, -0.85, 0], s: [1, 0.5, 1.3] });
     })));
   const ph = rng() * 6;
-  return { name: 'crawler', group: g, speed: 0.6, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+  return { ...base(), mood: 'defensive', head, yawOnly: false,
+    name: 'crawler', group: g, speed: 0.6, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
     tick(t) { legs.forEach((l, i) => { l.rotation.z = Math.sin(t * 4 + (i % 2) * Math.PI + i + ph) * 0.18; l.rotation.x = Math.cos(t * 4 + i + ph) * 0.2; }); } };
 }
 
@@ -257,7 +275,8 @@ function floater(rng: Rng): Animal {
     });
   });
   const ph = rng() * 6;
-  return { name: 'floater', group: g, speed: 0.8, flying: true, hover: 4 + rng() * 4, heading: 0, turn: 0, turnBias: 0,
+  return { ...base(), mood: 'curious', head: null, yawOnly: false,
+    name: 'floater', group: g, speed: 0.8, flying: true, hover: 4 + rng() * 4, heading: 0, turn: 0, turnBias: 0,
     tick(t) {
       tents.forEach((p, i) => { p.rotation.x = Math.sin(t * 1.5 + i + ph) * 0.25; p.rotation.z = Math.cos(t * 1.2 + i * 2 + ph) * 0.25; });
       dome.scale.y = 1 + Math.sin(t * 2 + ph) * 0.1;
@@ -294,7 +313,8 @@ function manta(rng: Rng): Animal {
     g.add(p); return p;
   };
   const wl = mk(-1), wr = mk(1), ph = rng() * 6;
-  return { name: 'manta', group: g, speed: 3.2, flying: true, hover: 28 + rng() * 14, heading: 0, turn: 0, turnBias: 0.12 * (rng() > 0.5 ? 1 : -1),
+  return { ...base(), mood: 'wary', head: null, yawOnly: false,
+    name: 'manta', group: g, speed: 3.2, flying: true, hover: 28 + rng() * 14, heading: 0, turn: 0, turnBias: 0.12 * (rng() > 0.5 ? 1 : -1),
     tick(t) { const f = Math.sin(t * 1.4 + ph) * 0.45; wr.rotation.z = f; wl.rotation.z = -f; g.rotation.z = Math.sin(t * 0.5 + ph) * 0.1; } };
 }
 
@@ -304,12 +324,13 @@ function bird(rng: Rng): Animal {
   const b = new Builder();
   b.add(S(0.3, 10, 8), main, { s: [0.8, 0.8, 1.5] })
    .add(S(0.22, 8, 6), belly, { p: [0, -0.06, 0.05], s: [0.8, 0.6, 1.3] })
-   .add(S(0.18, 8, 6), main, { p: [0, 0.1, 0.5] })
-   .add(K(0.06, 0.3, 4), acc, { p: [0, 0.08, 0.78], r: [Math.PI / 2, 0, 0] })
    .add(K(0.05, 0.5, 4), acc, { p: [0, 0.2, 0.35], r: [-0.8, 0, 0] });
   for (let i = -2; i <= 2; i++) b.add(K(0.06, 0.8, 4), i % 2 ? acc : main, { p: [i * 0.1, 0, -0.7], r: [-Math.PI / 2, 0, i * 0.12] });
-  eyes(b, [[-0.1, 0.16, 0.6, 0.045], [0.1, 0.16, 0.6, 0.045]]);
   b.into(g);
+  const head = limb(g, [0, 0.1, 0.5], hb => {
+    hb.add(S(0.18, 8, 6), main).add(K(0.06, 0.3, 4), acc, { p: [0, -0.02, 0.28], r: [Math.PI / 2, 0, 0] });
+    eyes(hb, [[-0.1, 0.06, 0.1, 0.045], [0.1, 0.06, 0.1, 0.045]]);
+  });
   const mk = (side: number) => {
     const p = new THREE.Group(); p.position.set(side * 0.18, 0.05, 0); p.scale.x = side;
     p.add(wingMesh(1.3, 0.7, main, 1, 0.8));
@@ -317,7 +338,8 @@ function bird(rng: Rng): Animal {
     g.add(p); return p;
   };
   const wl = mk(-1), wr = mk(1), ph = rng() * 6;
-  return { name: 'bird', group: g, speed: 6 + rng() * 2, flying: true, hover: 10 + rng() * 14, heading: 0, turn: 0, turnBias: (rng() > 0.5 ? 1 : -1) * (0.25 + rng() * 0.25),
+  return { ...base(), mood: 'skittish', head, yawOnly: false,
+    name: 'bird', group: g, speed: 6 + rng() * 2, flying: true, hover: 10 + rng() * 14, heading: 0, turn: 0, turnBias: (rng() > 0.5 ? 1 : -1) * (0.25 + rng() * 0.25),
     tick(t) { const f = Math.sin(t * 9 + ph) * 0.8; wr.rotation.z = f; wl.rotation.z = -f; g.rotation.z = -0.25 * Math.sign(this.turnBias); } };
 }
 
@@ -327,9 +349,11 @@ function buzzer(rng: Rng): Animal {
   const b = new Builder();
   b.add(S(0.14, 8, 6), main, { p: [0, 0, 0.3], s: [1, 1, 1.4] });
   for (let i = 0; i < 6; i++) b.add(C(0.05 - i * 0.004, 0.055 - i * 0.004, 0.3, 5), i % 2 ? acc : main, { p: [0, 0, -0.1 - i * 0.28], r: [Math.PI / 2, 0, 0] });
-  b.add(S(0.14, 8, 6), 0xff90ff, { p: [0, 0, 0.62], glow: true });
-  eyes(b, [[-0.1, 0.08, 0.62, 0.07], [0.1, 0.08, 0.62, 0.07]]);
   b.into(g);
+  const head = limb(g, [0, 0, 0.55], hb => {
+    hb.add(S(0.14, 8, 6), 0xff90ff, { p: [0, 0, 0.07], glow: true });
+    eyes(hb, [[-0.1, 0.08, 0.07, 0.07], [0.1, 0.08, 0.07, 0.07]]);
+  });
   const wings: THREE.Group[] = [];
   for (const side of [-1, 1]) for (const z of [0.3, 0.05]) {
     const p = new THREE.Group(); p.position.set(side * 0.1, 0.1, z); p.scale.x = side;
@@ -337,7 +361,8 @@ function buzzer(rng: Rng): Animal {
     g.add(p); wings.push(p);
   }
   const ph = rng() * 6;
-  return { name: 'buzzer', group: g, speed: 3.5, flying: true, hover: 1.5 + rng() * 3, heading: 0, turn: 0, turnBias: 0,
+  return { ...base(), mood: 'friendly', head, yawOnly: false,
+    name: 'buzzer', group: g, speed: 3.5, flying: true, hover: 1.5 + rng() * 3, heading: 0, turn: 0, turnBias: 0,
     tick(t) { wings.forEach((w, i) => { w.rotation.z = Math.sin(t * 45 + i) * 0.7 * (i % 2 ? 1 : -1); });
       return Math.sin(t * 2 + ph) * 0.25; } };
 }

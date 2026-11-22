@@ -93,7 +93,7 @@ function swipe(slip: number): number {
   check('terrain is flat at the landing spot', heightAt(0, 0) === 0 && Math.abs(heightAt(5, 5)) < 1e-9);
   let lo = 0, hi = 0;
   for (let x = -300; x <= 300; x += 5) for (let z = -300; z <= 300; z += 5) { const h = heightAt(x, z); lo = Math.min(lo, h); hi = Math.max(hi, h); }
-  check('terrain has hills and basins', hi > 6 && lo < -6, `range ${lo.toFixed(1)}..${hi.toFixed(1)} m`);
+  check('terrain has rolling plains and a lake basin', hi > 2.5 && lo < -6, `range ${lo.toFixed(1)}..${hi.toFixed(1)} m`);
   const out = V(0, 0, 0), n = V(0, 0, 0);
   let bad = 0;
   for (let i = 0; i < 200; i++) { // fast hand strikes from above onto random hill points

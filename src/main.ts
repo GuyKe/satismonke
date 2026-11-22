@@ -66,6 +66,11 @@ async function boot() {
     player.world = planet.world;
     player.gravityG = PLANET_GRAVITY_G;
     player.teleport(new THREE.Vector3(0, 0.1, 0));
+    // Your pod sits behind wherever you are facing when you land
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); fwd.y = 0;
+    if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
+    planet.placePod(new THREE.Vector3().copy(player.position).add(camera.position), fwd.normalize());
+    planet.onRoar = (pos, kind) => sfx.roar(pos, kind);
     sfx.startWind();
   };
   const story = new Story({
@@ -217,7 +222,9 @@ async function boot() {
       lasers.forEach(l => l.hide());
     }
 
-    if (planet) planet.update(dt, scene, new THREE.Vector3(player.position.x, player.position.y, player.position.z));
+    const headW = new THREE.Vector3().copy(player.position).add(camera.position);
+    if (inXR || planet) sfx.setListener(headW, new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion));
+    if (planet) planet.update(dt, scene, player.position, headW);
 
     renderer.render(scene, camera);
   });

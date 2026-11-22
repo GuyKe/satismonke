@@ -110,4 +110,76 @@ export class Sfx {
     src.start(); lfo.start();
     this.windNodes.push(src, bp, g, lfo, d);
   }
+
+  /** Keep the 3D audio listener on the player's head. */
+  setListener(pos: { x: number; y: number; z: number }, fwd: { x: number; y: number; z: number }): void {
+    if (!this.ctx) return;
+    const l = this.ctx.listener;
+    if (l.positionX) {
+      const t = this.ctx.currentTime;
+      l.positionX.setValueAtTime(pos.x, t); l.positionY.setValueAtTime(pos.y, t); l.positionZ.setValueAtTime(pos.z, t);
+      l.forwardX.setValueAtTime(fwd.x, t); l.forwardY.setValueAtTime(fwd.y, t); l.forwardZ.setValueAtTime(fwd.z, t);
+      l.upX.setValueAtTime(0, t); l.upY.setValueAtTime(1, t); l.upZ.setValueAtTime(0, t);
+    } else {
+      l.setPosition(pos.x, pos.y, pos.z); l.setOrientation(fwd.x, fwd.y, fwd.z, 0, 1, 0);
+    }
+  }
+
+  /** A creature roar, synthesized and positioned in 3D. `kind` picks the voice. */
+  roar(pos: { x: number; y: number; z: number }, kind: string): void {
+    if (!this.ctx) return;
+    const v = VOICES[kind] ?? VOICES.longneck;
+    const c = this.ctx, t = c.currentTime, end = t + v.dur;
+    const panner = c.createPanner();
+    panner.panningModel = 'HRTF'; panner.distanceModel = 'inverse';
+    panner.refDistance = 6; panner.rolloffFactor = 1.2; panner.maxDistance = 400;
+    panner.positionX.value = pos.x; panner.positionY.value = pos.y; panner.positionZ.value = pos.z;
+    const out = c.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.exponentialRampToValueAtTime(v.gain, t + Math.min(0.08, v.dur * 0.2));
+    out.gain.exponentialRampToValueAtTime(0.0001, end);
+    out.connect(panner); panner.connect(this.master);
+
+    // Two formant filters shape the sound into a throat
+    const f1 = c.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = v.form[0]; f1.Q.value = 3;
+    const f2 = c.createBiquadFilter(); f2.type = 'bandpass'; f2.frequency.value = v.form[1]; f2.Q.value = 4;
+    const mix = c.createGain(); mix.connect(f1); mix.connect(f2); f1.connect(out); f2.connect(out);
+
+    // Voice: pitch glide + vibrato
+    const o = c.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(v.f0, t); o.frequency.exponentialRampToValueAtTime(v.f1, end);
+    const vib = c.createOscillator(); vib.frequency.value = 5 + Math.random() * 3;
+    const vibAmt = c.createGain(); vibAmt.gain.value = v.f0 * 0.03;
+    vib.connect(vibAmt); vibAmt.connect(o.frequency);
+    const og = c.createGain(); og.gain.value = 1 - v.noise * 0.6;
+    o.connect(og); og.connect(mix);
+
+    // Breath / growl noise
+    const n = this.noiseSource(false);
+    const ng = c.createGain(); ng.gain.value = v.noise;
+    n.connect(ng); ng.connect(mix);
+
+    // Tremolo for rasp
+    if (v.trem > 0) {
+      const tr = c.createOscillator(); tr.frequency.value = v.trem;
+      const trg = c.createGain(); trg.gain.value = 0.45;
+      tr.connect(trg); trg.connect(mix.gain); mix.gain.value = 0.55;
+      tr.start(t); tr.stop(end + 0.05);
+    }
+    o.start(t); vib.start(t); n.start(t);
+    o.stop(end + 0.05); vib.stop(end + 0.05); n.stop(end + 0.05);
+  }
 }
+
+interface Voice { f0: number; f1: number; dur: number; noise: number; trem: number; form: [number, number]; gain: number }
+const VOICES: Record<string, Voice> = {
+  longneck: { f0: 95, f1: 70, dur: 1.8, noise: 0.25, trem: 6, form: [600, 1100], gain: 1.0 },
+  stilter: { f0: 380, f1: 170, dur: 1.0, noise: 0.1, trem: 9, form: [900, 1800], gain: 0.8 },
+  worm: { f0: 60, f1: 90, dur: 1.2, noise: 0.5, trem: 14, form: [300, 700], gain: 1.0 },
+  hopper: { f0: 620, f1: 300, dur: 0.5, noise: 0.15, trem: 0, form: [1200, 2400], gain: 0.7 },
+  crawler: { f0: 200, f1: 120, dur: 1.1, noise: 0.9, trem: 30, form: [1500, 3000], gain: 0.9 },
+  manta: { f0: 55, f1: 100, dur: 3.0, noise: 0.1, trem: 3, form: [300, 600], gain: 1.2 },
+  bird: { f0: 1700, f1: 900, dur: 0.45, noise: 0.1, trem: 0, form: [2500, 3500], gain: 0.6 },
+  buzzer: { f0: 300, f1: 360, dur: 0.7, noise: 0.2, trem: 60, form: [800, 1500], gain: 0.5 },
+  floater: { f0: 420, f1: 380, dur: 2.2, noise: 0.0, trem: 5, form: [700, 1400], gain: 0.6 },
+};
