@@ -15,9 +15,10 @@ npm run test:physics
 
 ## Controls
 - No joystick or legs: only your hands move you. Sticky surfaces (orange crates) grip, ice (blue) slides.
-- Menu > Calibrate arms (spread arms wide) scales reach to your arm span.
+- Press Play on the console. Reach scales to your arm span automatically once you have spread your arms wide.
 - Push, swipe and swing your hands against surfaces to move. Release to launch.
-- Menu (console at the front of the capsule): point a controller at it, pull the trigger.
+- Menu (console at the front of the capsule): point a controller at it, pull the trigger on Play.
+- Debug: add `?skip=planet` to jump to the planet.
 
 ## Layout
 - `src/physics/CollisionWorld.ts` – distance-field collisions (capsule hull + boxes), swept spheres

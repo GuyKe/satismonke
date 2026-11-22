@@ -6,6 +6,7 @@ export class LaserPointer {
   private beam: THREE.Mesh;
   private dot: THREE.Mesh;
   private raycaster = new THREE.Raycaster();
+  hide(): void { this.group.visible = false; this.dot.visible = false; }
   private origin = new THREE.Vector3();
   private dir = new THREE.Vector3();
   private quat = new THREE.Quaternion();

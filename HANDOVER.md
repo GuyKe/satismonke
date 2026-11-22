@@ -25,13 +25,24 @@ Headset: WebXR needs HTTPS. Easiest from a Mac: `npx cloudflared tunnel --url ht
 - `src/settings.ts`: gravity / jump multiplier / laser mode, persisted in localStorage.
 - `src/main.ts`: renderer, XR session, rig, controllers, loop. `window.__game` exposes player/world/settings/menu for debugging.
 
+## Game flow (src/game/Story.ts)
+Menu shows only "Play" (laser or mouse). Press -> `alarm` (7 s: lights flash red, siren, rumble, ship shakes, panel flashes "THRUSTERS FAILED / DEPLOYING EMERGENCY / BRAKES") -> `crash` (0.4 s fade to black, synthesized crash) -> `dark` (2 s) -> `title` ("SATISMONKE" fades in 2 s, holds 1.5 s, fades out 2 s) -> `landing` (planet built, player teleported, 3.5 s fade in) -> `planet`.
+Debug: `?skip=planet` jumps straight to the planet; `window.__game` has `story`, `planet` (set `planet.clock` to jump in time), `look(yaw, pitch)`.
+
+## Planet (src/world/Planet.ts, Animals.ts)
+Flat pink-purple ground with ~12k instanced grass blades near the landing spot, up to 48 trees at least 15 m apart (trunk = grippy cylinder collider, canopy = sphere collider), distant mountains, 16 procedural animals (long-neck, stilt-walker, glow-worm, jellyfish floater; they wander and dodge trunks, no collision with the player). Saturn is the sun: it arcs over for 7 min of day and sits below the horizon for 5 min of night (`DAY_SECONDS`, `NIGHT_SECONDS`); sky/fog/light colours follow its height, stars and a small moon appear at night. Planet gravity is `PLANET_GRAVITY_G` (0.6) in `main.ts`; the ship uses the settings value (0.3). The cycle starts 40 s into the day.
+`CollisionWorld` now also supports a ground plane, spheres and vertical cylinders, and the hull can be turned off.
+
+## Audio (src/audio/Sfx.ts)
+All sounds are synthesized with WebAudio (siren, rumble, crash, wind): no asset files. The AudioContext is created on first pointer press / XR session start; if audio is silent in the headset, check that.
+
 ## How locomotion works (so you can tune it)
 1. If no hand held last frame: gravity (`gravityG` * 9.81) plus light drag, integrate.
 2. Each hand sweeps from its last resolved position to rig + controller position. On contact the body moves by the push-out vector minus the hand's tangential motion (grip = 1).
 3. Head sphere (r 0.14) and body sphere (r 0.25 at head xz, sitting on the floor) are pushed out of geometry.
    Torso: a sphere hangs 0.45 m under the head (`BODY_DROP`, `BODY_R`). There are no legs, so nothing lets you stand or walk; you rest on surfaces with your head ~0.7 m up and only hand pushes move you. No thumbstick locomotion exists by design.
    Slip: every collider has `slip` 0..1 (0 sticky, 1 ice). Hull 0.35; in `Capsule.ts` the `SLIP` table sets floor 0.05, bark crates/bar 0, ice block/bar 0.95, metal 0.4. Contact grip = 1 - slip, applied to the tangential part of hand motion only; the normal push-off is unaffected.
-   Arm span: `ArmCalibration` measures the widest hand-to-hand distance (arms outstretched) via the menu's "Calibrate arms" button (3 s countdown, 2 s sampling), stores it in `settings.armSpan`, and scales hand offsets about the shoulders by `REF_SPAN (1.7) / armSpan` (clamped 0.6-1.6). Physics, hand spheres and the HUD all see the scaled hands.
+   Arm span: the menu no longer has a calibrate button. `ArmCalibration.observe` passively remembers the widest hand-to-hand distance seen (>1.1 m, capped 2.2 m) in `settings.armSpan`, so reach scales after you've spread your arms once (the manual 3 s countdown `start()` still exists but is unused), and scales hand offsets about the shoulders by `REF_SPAN (1.7) / armSpan` (clamped 0.6-1.6). Physics, hand spheres and the HUD all see the scaled hands.
 4. Velocity is measured from actual displacement and kept for 6 frames. On the frame contact ends, velocity = average * `jumpMult`, capped at `maxSpeed` (8).
 Knobs: `HAND_R`, `SKIN`, `BODY_R`, `HISTORY` in `GorillaPlayer.ts`; gravity/jump in the menu.
 

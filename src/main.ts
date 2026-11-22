@@ -2,12 +2,18 @@ import * as THREE from 'three';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import { CollisionWorld } from './physics/CollisionWorld';
 import { GorillaPlayer } from './player/GorillaPlayer';
+import { ArmCalibration } from './player/ArmCalibration';
 import { buildCapsule } from './world/Capsule';
+import { Planet } from './world/Planet';
 import { MenuConsole } from './ui/MenuConsole';
 import { TelemetryScreen } from './ui/TelemetryScreen';
 import { LaserPointer } from './ui/LaserPointer';
-import { ArmCalibration } from './player/ArmCalibration';
+import { Overlay } from './ui/Overlay';
+import { Story } from './game/Story';
+import { Sfx } from './audio/Sfx';
 import { loadSettings } from './settings';
+
+const PLANET_GRAVITY_G = 0.6;
 
 async function boot() {
   if (new URLSearchParams(location.search).has('emu')) {
@@ -18,6 +24,7 @@ async function boot() {
 
   const settings = loadSettings();
   const SPAWN = new THREE.Vector3(0, -1.8, 2);
+  const debugSkip = new URLSearchParams(location.search).get('skip'); // ?skip=planet jumps straight there
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -29,32 +36,58 @@ async function boot() {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x05070d);
-  const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 50);
+  const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 6000);
 
-  // World + collisions
-  const world = new CollisionWorld();
-  scene.add(buildCapsule(world));
+  const sfx = new Sfx();
+  renderer.xr.addEventListener('sessionstart', () => sfx.ensure());
+  addEventListener('pointerdown', () => sfx.ensure());
 
-  const player = new GorillaPlayer(world, settings);
+  // ---- Ship (capsule interior) ----
+  const shipWorld = new CollisionWorld();
+  const ship = new THREE.Group();
+  const capsule = buildCapsule(shipWorld);
+  ship.add(capsule.group);
+  scene.add(ship);
+
+  const player = new GorillaPlayer(shipWorld, settings);
   player.teleport(SPAWN);
 
-  // Rig: moving it moves the whole play space. Camera and controllers are children.
   const rig = new THREE.Group();
   rig.add(camera);
   scene.add(rig);
+  const overlay = new Overlay(camera);
 
-  // Menu console + side screens
-  const arms = new ArmCalibration(settings);
-  const menu = new MenuConsole(settings, { resetPosition: () => player.teleport(SPAWN), calibrateArms: () => arms.start() });
+  // ---- Story: Play -> alarm -> crash -> title -> planet ----
+  let planet: Planet | null = null;
+  const land = () => {
+    planet = new Planet();
+    ship.visible = false;
+    scene.add(planet.group);
+    player.world = planet.world;
+    player.gravityG = PLANET_GRAVITY_G;
+    player.teleport(new THREE.Vector3(0, 0.1, 0));
+    sfx.startWind();
+  };
+  const story = new Story({
+    onAlarm: () => {
+      sfx.ensure(); sfx.startAlarm();
+      menu.showMessage(['THRUSTERS FAILED', 'DEPLOYING EMERGENCY', 'BRAKES']);
+    },
+    onCrash: () => { sfx.stopAlarm(); sfx.crash(); },
+    onLand: land,
+  });
+
+  // ---- Console + screens (on the ship) ----
+  const menu = new MenuConsole(() => story.start());
   menu.mesh.position.set(0, -0.8, -3.38);
-  scene.add(menu.mesh);
+  ship.add(menu.mesh);
 
   const telemetry = new TelemetryScreen();
   telemetry.mesh.position.set(-2.9, -0.3, -0.5);
   telemetry.mesh.rotation.y = Math.PI / 2;
-  scene.add(telemetry.mesh);
+  ship.add(telemetry.mesh);
 
-  // Controllers: grip = hand position, controller ray = laser
+  // ---- Controllers ----
   const grips = [0, 1].map(i => renderer.xr.getControllerGrip(i));
   const rays = [0, 1].map(i => renderer.xr.getController(i));
   const inputs: (XRInputSource | null)[] = [null, null];
@@ -78,7 +111,14 @@ async function boot() {
     r.addEventListener('selectstart', () => { if (menu.click(i)) buzz(i, 0.6, 40); });
   });
 
-  // Desktop preview: drag to look, click the menu with the mouse.
+  const arms = new ArmCalibration(settings);
+  const torso = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 20, 14).scale(1, 1.35, 0.9),
+    new THREE.MeshStandardMaterial({ color: 0x4a3322, roughness: 0.95 }),
+  );
+  scene.add(torso);
+
+  // ---- Desktop preview: drag to look, click the menu ----
   const mouse = new THREE.Vector2();
   const mouseRay = new THREE.Raycaster();
   let yaw = 0, pitch = 0, dragging = false;
@@ -95,21 +135,37 @@ async function boot() {
     renderer.setSize(innerWidth, innerHeight);
   });
 
-  // Legless torso under the head (visual only; the collider lives in GorillaPlayer)
-  const torso = new THREE.Mesh(
-    new THREE.SphereGeometry(0.22, 20, 14).scale(1, 1.35, 0.9),
-    new THREE.MeshStandardMaterial({ color: 0x4a3322, roughness: 0.95 }),
-  );
-  scene.add(torso);
+  if (debugSkip === 'planet') { land(); story.phase = 'planet'; }
+
+  // ---- Alarm lighting ----
+  const baseHemi = capsule.lights.hemi.intensity;
+  const baseHemiColor = capsule.lights.hemi.color.clone();
+  const basePoint = capsule.lights.points.map(l => ({ c: l.color.clone(), i: l.intensity }));
+  const red = new THREE.Color(0xff1010);
+  const setAlarmLights = (on: boolean, time: number) => {
+    const pulse = 0.5 + 0.5 * Math.sin(time * Math.PI * 2 * 1.3);
+    capsule.lights.hemi.color.copy(on ? red : baseHemiColor);
+    capsule.lights.hemi.intensity = on ? 0.05 + pulse * 0.7 : baseHemi;
+    capsule.lights.points.forEach((l, i) => {
+      l.color.copy(on ? red : basePoint[i].c);
+      l.intensity = on ? basePoint[i].i * (0.05 + pulse * 1.6) : basePoint[i].i;
+    });
+  };
 
   const hl = [new THREE.Vector3(), new THREE.Vector3()];   // raw controller positions
   const sl = [new THREE.Vector3(), new THREE.Vector3()];   // arm-span-scaled, fed to physics
   const hadTouch = [false, false];
   const clock = new THREE.Clock();
+  let elapsed = 0;
 
   renderer.setAnimationLoop(() => {
-    const dt = clock.getDelta();
+    const dt = Math.min(clock.getDelta(), 0.1);
+    elapsed += dt;
     const inXR = renderer.xr.isPresenting;
+
+    story.update(dt);
+    overlay.set(story.blackAlpha, story.titleAlpha);
+    sfx.rumble(story.rumble);
 
     if (inXR) {
       // In XR, three updates camera + controller transforms (rig-local) before this callback.
@@ -117,7 +173,7 @@ async function boot() {
         const connected = inputs[i] !== null && grips[i].position.lengthSq() > 0;
         return connected ? hl[i].copy(grips[i].position) : null;
       });
-      arms.update(dt, raw[0], raw[1]);
+      arms.observe(dt, raw[0], raw[1]);
       const handLocals = raw.map((r, i) => (r ? arms.apply(camera.position, r, sl[i]) : null));
       player.update(dt, camera.position, handLocals);
     } else {
@@ -128,9 +184,7 @@ async function boot() {
     rig.position.copy(player.position);
     torso.visible = inXR;
     torso.position.set(player.position.x + camera.position.x, player.position.y + camera.position.y - 0.45, player.position.z + camera.position.z);
-    menu.setStatus(arms.status());
 
-    // Resolved hand spheres + haptics on first contact
     player.hands.forEach((h, i) => {
       handMeshes[i].visible = inXR && inputs[i] !== null;
       handMeshes[i].position.copy(h.world);
@@ -138,29 +192,38 @@ async function boot() {
       hadTouch[i] = h.touching;
     });
 
-    // Laser pointers over the menu
-    scene.updateMatrixWorld(true);
-    if (inXR) {
-      lasers.forEach((l, i) => menu.hover(i, l.cast(menu.mesh, settings.laserAlways)));
+    if (ship.visible) {
+      // Ship shakes and flashes red during the emergency
+      const s = story.shake;
+      ship.position.set((Math.random() - 0.5) * s, (Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
+      setAlarmLights(story.alarm > 0, elapsed);
+
+      scene.updateMatrixWorld(true);
+      if (inXR) {
+        lasers.forEach((l, i) => menu.hover(i, l.cast(menu.mesh, false)));
+      } else {
+        mouseRay.setFromCamera(mouse, camera);
+        menu.hover(99, mouseRay.intersectObject(menu.mesh, false)[0]?.uv ?? null);
+      }
+      menu.update(elapsed);
+      telemetry.update(dt, {
+        speed: player.velocity.length(),
+        height: player.position.y + (inXR ? camera.position.y : 1.6) + 3,
+        touching: player.hands.filter(h => h.touching).length,
+        gravityG: player.gravityG,
+        gripPct: (1 - player.lastSlip) * 100,
+      });
     } else {
-      mouseRay.setFromCamera(mouse, camera);
-      const hit = mouseRay.intersectObject(menu.mesh, false)[0];
-      menu.hover(99, hit?.uv ?? null);
+      lasers.forEach(l => l.hide());
     }
-    menu.update();
-    telemetry.update(dt, {
-      speed: player.velocity.length(),
-      height: player.position.y + (inXR ? camera.position.y : 1.6) + 3,
-      touching: player.hands.filter(h => h.touching).length,
-      gravityG: settings.gravityG,
-      gripPct: (1 - player.lastSlip) * 100,
-    });
+
+    if (planet) planet.update(dt, scene, new THREE.Vector3(player.position.x, player.position.y, player.position.z));
 
     renderer.render(scene, camera);
   });
 
   // Exposed for debugging / automated tests
-  (window as unknown as Record<string, unknown>).__game = { player, world, settings, menu };
+  (window as unknown as Record<string, unknown>).__game = { look: (y: number, p: number) => { yaw = y; pitch = p; }, player, story, settings, menu, get planet() { return planet; } };
 }
 
 boot();

@@ -25,6 +25,19 @@ export class ArmCalibration {
     return THREE.MathUtils.clamp(REF_SPAN / span, 0.6, 1.6);
   }
 
+  private saveTimer = 0;
+
+  /**
+   * Passive calibration: remember the widest hand-to-hand span seen during play and use that as
+   * the arm span. Needs no menu: reaching wide once is enough.
+   */
+  observe(dt: number, left: THREE.Vector3 | null, right: THREE.Vector3 | null): void {
+    if (!left || !right) return;
+    const d = Math.min(left.distanceTo(right), 2.2);
+    if (d > 1.1 && d > this.settings.armSpan) { this.settings.armSpan = d; this.saveTimer = 3; }
+    if (this.saveTimer > 0 && (this.saveTimer -= dt) <= 0) saveSettings(this.settings);
+  }
+
   start(): void { this.state = 'counting'; this.t = 0; this.widest = 0; this.failed = false; }
 
   /** Feed raw (unscaled) hand positions each frame while calibrating. */

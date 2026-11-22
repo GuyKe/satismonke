@@ -1,92 +1,75 @@
 import * as THREE from 'three';
 import { Screen } from './Screen';
-import { Settings, GRAVITY_STEPS, JUMP_STEPS, saveSettings } from '../settings';
-
-interface Button {
-  label: () => string;
-  x: number; y: number; w: number; h: number; // canvas px
-  onClick: () => void;
-}
 
 const W = 640, H = 400;
+const BTN = { x: 90, y: 110, w: 460, h: 180 };
 
-/** The main menu panel on the console. Buttons are hit-tested from a UV coordinate. */
+/** Console panel: a single "Play" button, later replaced by an emergency message. */
 export class MenuConsole extends Screen {
-  private buttons: Button[] = [];
-  private hovered = new Map<number, number>(); // pointer id -> button index
+  private hovered = new Set<number>();
+  private message: string[] | null = null;
   private dirty = true;
-  private statusText = '';
+  private lastFlash = -1;
 
-  constructor(private settings: Settings, private actions: { resetPosition: () => void; calibrateArms: () => void }) {
+  constructor(private onPlay: () => void) {
     super(1.6, 1.0, W, H);
-    const cycle = (steps: number[], cur: number) => steps[(steps.indexOf(cur) + 1) % steps.length] ?? steps[0];
-    const bw = 280, bh = 66, gx = 30, top = 108, gy = 14;
-    const defs: [() => string, () => void][] = [
-      [() => `Gravity: ${this.settings.gravityG}g`, () => { this.settings.gravityG = cycle(GRAVITY_STEPS, this.settings.gravityG); }],
-      [() => `Jump power: ${this.settings.jumpMult.toFixed(2)}x`, () => { this.settings.jumpMult = cycle(JUMP_STEPS, this.settings.jumpMult); }],
-      [() => `Laser: ${this.settings.laserAlways ? 'always' : 'auto'}`, () => { this.settings.laserAlways = !this.settings.laserAlways; }],
-      [() => 'Calibrate arms', () => this.actions.calibrateArms()],
-      [() => 'Reset position', () => this.actions.resetPosition()],
-    ];
-    defs.forEach(([label, onClick], i) => {
-      this.buttons.push({
-        label, onClick,
-        x: gx + (i % 2) * (bw + gx), y: top + Math.floor(i / 2) * (bh + gy), w: bw, h: bh,
-      });
-    });
-    this.redraw();
+    this.redraw(0);
   }
 
-  /** Returns the button index under a UV, or -1. */
-  private pick(uv: THREE.Vector2 | null): number {
-    if (!uv) return -1;
+  private inButton(uv: THREE.Vector2 | null): boolean {
+    if (!uv) return false;
     const px = uv.x * W, py = (1 - uv.y) * H;
-    return this.buttons.findIndex(b => px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h);
+    return px >= BTN.x && px <= BTN.x + BTN.w && py >= BTN.y && py <= BTN.y + BTN.h;
   }
 
-  /** Update hover state for a pointer. Returns true if a button is hovered. */
+  /** Update hover state for a pointer. Returns true if the button is hovered. */
   hover(pointer: number, uv: THREE.Vector2 | null): boolean {
-    const idx = this.pick(uv);
-    const prev = this.hovered.get(pointer) ?? -1;
-    if (idx !== prev) { this.hovered.set(pointer, idx); this.dirty = true; }
-    return idx >= 0;
+    const on = !this.message && this.inButton(uv);
+    if (on !== this.hovered.has(pointer)) {
+      if (on) this.hovered.add(pointer); else this.hovered.delete(pointer);
+      this.dirty = true;
+    }
+    return on;
   }
 
-  /** Activate the hovered button of a pointer. Returns true if something was pressed. */
+  /** Press with a pointer. Returns true if Play was pressed. */
   click(pointer: number): boolean {
-    const idx = this.hovered.get(pointer) ?? -1;
-    if (idx < 0) return false;
-    this.buttons[idx].onClick();
-    saveSettings(this.settings);
-    this.dirty = true;
+    if (this.message || !this.hovered.has(pointer)) return false;
+    this.onPlay();
     return true;
   }
 
-  setStatus(text: string): void { if (text !== this.statusText) { this.statusText = text; this.dirty = true; } }
+  showMessage(lines: string[]): void { this.message = lines; this.hovered.clear(); this.dirty = true; }
 
-  update(): void { if (this.dirty) this.redraw(); }
+  /** Call every frame with elapsed seconds; the message flashes. */
+  update(time: number): void {
+    const flash = this.message ? Math.floor(time * 4) : -1;
+    if (this.dirty || (this.message && flash !== this.lastFlash)) this.redraw(time);
+    this.lastFlash = flash;
+  }
 
-  private redraw(): void {
+  private redraw(time: number): void {
     this.dirty = false;
     const { ctx } = this;
-    ctx.fillStyle = '#0a0f1f'; ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 5; ctx.strokeRect(6, 6, W - 12, H - 12);
-    ctx.fillStyle = '#ffb347'; ctx.font = 'bold 48px monospace';
-    ctx.fillText('SATISMONKE', 30, 70);
-    ctx.font = '20px monospace'; ctx.fillStyle = '#8aa';
-    ctx.fillText('point + trigger to select', 34, 98);
-    ctx.font = '22px monospace'; ctx.fillStyle = '#7fe3c1';
-    ctx.fillText(this.statusText, 34, H - 24);
-    const hovered = new Set(this.hovered.values());
-    this.buttons.forEach((b, i) => {
-      ctx.fillStyle = hovered.has(i) ? '#ffb347' : '#1c2a4a';
-      ctx.fillRect(b.x, b.y, b.w, b.h);
-      ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 3; ctx.strokeRect(b.x, b.y, b.w, b.h);
-      ctx.fillStyle = hovered.has(i) ? '#10131f' : '#fff';
-      ctx.font = 'bold 26px monospace';
-      const text = b.label();
-      ctx.fillText(text, b.x + (b.w - ctx.measureText(text).width) / 2, b.y + b.h / 2 + 10);
-    });
+    ctx.textAlign = 'center';
+    if (this.message) {
+      const on = Math.floor(time * 4) % 2 === 0;
+      ctx.fillStyle = on ? '#3a0508' : '#16070a'; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = '#ff2a2a'; ctx.lineWidth = 8; ctx.strokeRect(8, 8, W - 16, H - 16);
+      ctx.fillStyle = on ? '#ff4040' : '#aa2222';
+      ctx.font = 'bold 46px monospace';
+      const lh = 62, y0 = H / 2 - ((this.message.length - 1) * lh) / 2 + 14;
+      this.message.forEach((l, i) => ctx.fillText(l, W / 2, y0 + i * lh));
+    } else {
+      const hot = this.hovered.size > 0;
+      ctx.fillStyle = '#0a0f1f'; ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 5; ctx.strokeRect(6, 6, W - 12, H - 12);
+      ctx.fillStyle = hot ? '#ffb347' : '#1c2a4a'; ctx.fillRect(BTN.x, BTN.y, BTN.w, BTN.h);
+      ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 4; ctx.strokeRect(BTN.x, BTN.y, BTN.w, BTN.h);
+      ctx.fillStyle = hot ? '#10131f' : '#fff'; ctx.font = 'bold 90px monospace';
+      ctx.fillText('Play', W / 2, BTN.y + BTN.h / 2 + 30);
+    }
+    ctx.textAlign = 'start';
     this.refresh();
   }
 }

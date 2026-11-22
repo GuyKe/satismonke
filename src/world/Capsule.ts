@@ -15,7 +15,9 @@ function gridTexture(): THREE.CanvasTexture {
 }
 
 /** Builds the hull, props and matching colliders. Returns a group to add to the scene. */
-export function buildCapsule(world: CollisionWorld): THREE.Group {
+export interface CapsuleLights { points: THREE.PointLight[]; hemi: THREE.HemisphereLight; }
+
+export function buildCapsule(world: CollisionWorld): { group: THREE.Group; lights: CapsuleLights } {
   const root = new THREE.Group();
   const R = world.radius, hs = world.halfSegment;
 
@@ -65,11 +67,14 @@ export function buildCapsule(world: CollisionWorld): THREE.Group {
   addBox(0, 0.2, 3.0, 5.4, 0.1, 0.1, accentMat, SLIP.bark);
 
   // Lights
-  root.add(new THREE.HemisphereLight(0xbfd4ff, 0x20242e, 1.1));
+  const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x20242e, 1.1);
+  root.add(hemi);
+  const points: THREE.PointLight[] = [];
   for (const z of [-3, 0, 3]) {
     const l = new THREE.PointLight(0xfff0d8, 12, 9, 1.6);
     l.position.set(0, 2.2, z);
     root.add(l);
+    points.push(l);
   }
-  return root;
+  return { group: root, lights: { points, hemi } };
 }

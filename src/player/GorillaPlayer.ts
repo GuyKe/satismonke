@@ -40,7 +40,10 @@ export class GorillaPlayer {
   private touchedLast = false;
   private n = new THREE.Vector3();
 
-  constructor(private world: CollisionWorld, private settings: Settings) {}
+  /** Runtime gravity in g (not persisted): the capsule is low-g, planets can differ. */
+  gravityG: number;
+
+  constructor(public world: CollisionWorld, private settings: Settings) { this.gravityG = settings.gravityG; }
 
   get anyTouching(): boolean { return this.hands[0].touching || this.hands[1].touching; }
 
@@ -59,7 +62,7 @@ export class GorillaPlayer {
 
     // 1. Free flight: gravity and integration only while no hand held us last frame.
     if (!this.touchedLast) {
-      this.velocity.y -= G * this.settings.gravityG * dt;
+      this.velocity.y -= G * this.gravityG * dt;
       this.velocity.multiplyScalar(1 - 0.05 * dt); // tiny drag keeps 0g from drifting forever
       this.position.addScaledVector(this.velocity, dt);
     }
