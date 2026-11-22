@@ -46,6 +46,8 @@ export class GorillaPlayer {
   gravityG: number;
   /** Runtime launch multiplier and speed cap (upgrades change these; not persisted). */
   jumpMult: number;
+  /** 1 = normal; lower makes slippery surfaces grip better (Sticky Gloves). */
+  slipScale = 1;
   maxSpeed: number;
 
   constructor(public world: CollisionWorld, private settings: Settings) { this.gravityG = settings.gravityG; this.jumpMult = settings.jumpMult; this.maxSpeed = settings.maxSpeed; }
@@ -97,7 +99,7 @@ export class GorillaPlayer {
         handDelta.addScaledVector(nOut, -handDelta.dot(nOut));
         const slip = this.world.slipAt(resolved);
         this.lastSlip = slip;
-        shift.addScaledVector(handDelta, -(1 - slip)); // slip: how much of the swipe is lost
+        shift.addScaledVector(handDelta, -(1 - slip * this.slipScale)); // slip: how much of the swipe is lost
         this.position.add(shift);
         if (!hand.touching) hand.started = true;
         touching = true;

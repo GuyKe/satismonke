@@ -114,5 +114,5 @@ export function buildHubMesh(ghost = false): HubMesh {
     group.traverse(o => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).material = gm; });
     group.userData.ghostMaterial = gm;
   }
-  return { group, benchScreenAt: new THREE.Vector3(-1.9, FLOOR + 1.75, -2.43), computerScreenAt: new THREE.Vector3(2.0, FLOOR + 1.1, -2.15) };
+  return { group, benchScreenAt: new THREE.Vector3(-1.9, FLOOR + 1.62, -2.43), computerScreenAt: new THREE.Vector3(2.0, FLOOR + 1.1, -2.15) };
 }

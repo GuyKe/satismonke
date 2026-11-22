@@ -4,7 +4,8 @@ import { CollisionWorld } from './physics/CollisionWorld';
 import { GorillaPlayer } from './player/GorillaPlayer';
 import { ArmCalibration } from './player/ArmCalibration';
 import { buildCapsule } from './world/Capsule';
-import { Planet, POD_OWNER, BOULDER_OWNER } from './world/Planet';
+import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER } from './world/Planet';
+import { buildCampfire, buildLamp, makeGhost, PropKind } from './world/Props';
 import { buildHubMesh, HubMesh } from './world/Hub';
 import { heightAt } from './world/Terrain';
 import { MenuConsole } from './ui/MenuConsole';
@@ -15,7 +16,7 @@ import { MapMenu } from './ui/MapMenu';
 import { RecipePanel } from './ui/RecipePanel';
 import { ComputerScreen } from './ui/ComputerScreen';
 import { ResourceHud, ObjectiveHud } from './ui/Hud';
-import { Progress, RECIPES, POD_HITS, POD_STEEL } from './game/Progress';
+import { Progress, RECIPES, POD_HITS, POD_STEEL, BOULDER_HITS, TREE_HITS, CRYSTAL_HITS, MAX_PLACED } from './game/Progress';
 import { Story } from './game/Story';
 import { Sfx } from './audio/Sfx';
 import { loadSettings } from './settings';
@@ -97,23 +98,49 @@ async function boot() {
   };
 
   // Hub: ghost while placing, bench + computer once built
-  let placing = false;
-  let ghost: HubMesh | null = null;
+  let placing: 'hub' | PropKind | null = null;
+  let ghost: { group: THREE.Group } | null = null;
   let ghostPose: { x: number; z: number; y: number; yaw: number; ok: boolean; reason: string } | null = null;
   let hubUi: { bench: RecipePanel; computer: ComputerScreen } | null = null;
   const lantern = new THREE.PointLight(0xffe2a0, 3, 16, 2);
 
+  const headPos = () => new THREE.Vector3().copy(player.position).add(camera.position);
+  const startPlacing = (kind: 'hub' | PropKind) => {
+    placing = kind; setPanel(null);
+    if (kind === 'hub') ghost = buildHubMesh(true);
+    else { const pm = kind === 'campfire' ? buildCampfire(false) : buildLamp(false); makeGhost(pm.group); ghost = pm; }
+    scene.add(ghost.group);
+    toast('Aim, then pull the trigger (B cancels)', headPos().add(new THREE.Vector3(0, 0.3, 0)));
+  };
+  /** B while placing: put the thing back in your pocket and refund it. */
+  const cancelPlacing = () => {
+    if (!placing) return;
+    const id = placing === 'hub' ? 'hub' : placing;
+    const r = progress.recipe(id);
+    for (const k of Object.keys(r.cost) as (keyof typeof r.cost)[]) progress.items[k] += r.cost[k] ?? 0;
+    if (!r.repeatable) progress.crafted.delete(id);
+    progress.made[id] = Math.max(0, progress.count(id) - 1);
+    scene.remove(ghost!.group); ghost = null; placing = null; ghostPose = null;
+  };
+
   const craft = (id: string) => {
     const r = progress.recipe(id);
-    if (progress.has(id) || !r.unlocked(progress) || !progress.canAfford(r.cost)) { sfx.fail(); return; }
-    progress.spend(r.cost); progress.crafted.add(id); sfx.craft();
-    if (id === 'hub') {
-      placing = true; setPanel(null);
-      ghost = buildHubMesh(true); scene.add(ghost.group);
-      toast('Aim and pull the trigger to place', new THREE.Vector3().copy(player.position).add(camera.position).add(new THREE.Vector3(0, 0.3, 0)));
+    if (!r.unlocked(progress) || !progress.canAfford(r.cost)) { sfx.fail(); return; }
+    if (!r.repeatable && progress.has(id)) { sfx.fail(); return; }
+    if (r.repeatable && progress.propsPlacedOrPending(r.id) >= MAX_PLACED) { sfx.fail(); toast(`Max ${MAX_PLACED} placed`, headPos()); return; }
+    if (placing) { sfx.fail(); return; }
+    progress.spend(r.cost); progress.made[r.id] = progress.count(r.id) + 1;
+    if (!r.repeatable) progress.crafted.add(id);
+    sfx.craft();
+    switch (id) {
+      case 'hub': case 'campfire': case 'lamp': startPlacing(id); break;
+      case 'lantern': lantern.position.set(0, -0.2, -0.2); camera.add(lantern); break;
+      case 'gloves': player.jumpMult = Math.max(player.jumpMult, 1.5); player.maxSpeed = Math.max(player.maxSpeed, 10); break;
+      case 'crystalgloves': player.jumpMult = 1.8; player.maxSpeed = 12; break;
+      case 'sticky': player.slipScale = 0.3; break;
+      case 'floatcore': player.gravityG = 0.35; break;
+      default: break; // axe, pickaxe: read from progress when you punch
     }
-    if (id === 'lantern') { lantern.position.set(0, -0.2, -0.2); camera.add(lantern); }
-    if (id === 'gloves') { player.jumpMult = 1.5; player.maxSpeed = 10; }
   };
 
   // ---- Story: Play -> alarm -> crash -> title -> planet ----
@@ -131,8 +158,9 @@ async function boot() {
     planet.placePod(new THREE.Vector3().copy(player.position).add(camera.position), fwd.normalize());
     planet.onRoar = (pos, kind) => sfx.roar(pos, kind);
     planet.onTreeLanded = pos => sfx.thump(pos);
-    planet.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); sfx.pickup(); toast(`+${k} wood`, pos); };
-    planet.onStone = (n, pos) => { progress.add('stone', n); progress.bouldersBroken++; sfx.crumble(); toast(`+${n} stone`, pos); };
+    planet.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); progress.treesFelled++; sfx.pickup(); toast(`+${k} wood`, pos); };
+    planet.onStone = (n, pos) => { const k = n + (progress.has('pickaxe') ? 1 : 0); progress.add('stone', k); progress.bouldersBroken++; sfx.crumble(); toast(`+${k} stone`, pos); };
+    planet.onCrystal = (n, pos) => { progress.add('crystal', n); sfx.crumble(); sfx.pickup(); toast(`+${n} crystal`, pos); };
     planet.onPodDestroyed = pos => { progress.podDestroyed = true; progress.podHits = POD_HITS; progress.add('steel', POD_STEEL); sfx.crumble(); toast(`+${POD_STEEL} steel`, pos); };
     sfx.startWind();
   };
@@ -178,7 +206,7 @@ async function boot() {
   const press = (i: number) => {
     const t = hoverTarget[i];
     if (t && t.click(i)) { buzz(i, 0.6, 40); return; }
-    if (placing) tryPlaceHub();
+    if (placing) tryPlace();
   };
   rays.forEach((r, i) => {
     rig.add(r); rig.add(grips[i]);
@@ -256,19 +284,27 @@ async function boot() {
     }
     return null;
   };
-  const tryPlaceHub = () => {
+  const tryPlace = () => {
     if (!placing || !planet || !ghostPose) return;
-    if (!ghostPose.ok) { sfx.fail(); toast(ghostPose.reason || 'Aim at the ground', new THREE.Vector3().copy(player.position).add(camera.position)); return; }
-    const built = planet.placeHub(ghostPose.x, ghostPose.z, ghostPose.yaw, ghostPose.y);
-    scene.remove(ghost!.group); ghost = null; placing = false; progress.hubPlaced = true;
-    const bench = new RecipePanel('CRAFTING BENCH', RECIPES.filter(r => r.where === 'bench'), progress, id => craft(id), 'Unlock more by exploring', 1.2);
-    const computer = new ComputerScreen(() => { progress.gamePlayed = true; });
-    bench.mesh.position.copy(built.mesh.benchScreenAt);
-    computer.mesh.position.copy(built.mesh.computerScreenAt);
-    built.group.add(bench.mesh, computer.mesh);
-    hubUi = { bench, computer };
-    sfx.craft(); sfx.thump(new THREE.Vector3(ghostPose.x, ghostPose.y, ghostPose.z));
-    toast('Hub built!', new THREE.Vector3(ghostPose.x, ghostPose.y + 3.5, ghostPose.z));
+    if (!ghostPose.ok) { sfx.fail(); toast(ghostPose.reason || 'Aim at the ground', headPos()); return; }
+    const gp = ghostPose, kind = placing;
+    scene.remove(ghost!.group); ghost = null; placing = null; ghostPose = null;
+    if (kind === 'hub') {
+      const built = planet.placeHub(gp.x, gp.z, gp.yaw, gp.y);
+      progress.hubPlaced = true;
+      const bench = new RecipePanel('CRAFTING BENCH', RECIPES.filter(r => r.where === 'bench'), progress, id => craft(id), 'Unlock more by exploring', 1.15);
+      const computer = new ComputerScreen(() => { progress.gamePlayed = true; });
+      bench.mesh.position.copy(built.mesh.benchScreenAt);
+      computer.mesh.position.copy(built.mesh.computerScreenAt);
+      built.group.add(bench.mesh, computer.mesh);
+      hubUi = { bench, computer };
+      sfx.craft(); sfx.thump(new THREE.Vector3(gp.x, gp.y, gp.z));
+      toast('Hub built!', new THREE.Vector3(gp.x, gp.y + 3.5, gp.z));
+    } else {
+      planet.placeProp(kind, gp.x, gp.z);
+      sfx.craft(); sfx.thump(new THREE.Vector3(gp.x, gp.y, gp.z));
+      toast(kind === 'campfire' ? 'Campfire lit!' : 'Lamp placed!', new THREE.Vector3(gp.x, gp.y + 2, gp.z));
+    }
   };
 
   const hl = [new THREE.Vector3(), new THREE.Vector3()];   // raw controller positions
@@ -288,7 +324,7 @@ async function boot() {
     const aNow = keys.a || handBtn('right', 4), bNow = keys.b || handBtn('right', 5), xNow = keys.x || handBtn('left', 4);
     if (aNow && !aPrev) setPanel(floating === 'map' ? null : 'map');        // A: map
     if (xNow && !xPrev) setPanel(floating === 'craft' ? null : 'craft');    // X: crafting
-    if (bNow && !bPrev && ship.visible) story.skipToTitle();               // B: skip the crash scene (capsule only)
+    if (bNow && !bPrev) { if (ship.visible) story.skipToTitle(); else cancelPlacing(); } // B: skip the crash scene (capsule) / cancel placing (planet)
     aPrev = aNow; bPrev = bNow; xPrev = xNow;
     const gripDown = [keys.grip || btn(0, 1), keys.grip || btn(1, 1)];
     overlay.set(story.blackAlpha, story.titleAlpha);
@@ -332,10 +368,17 @@ async function boot() {
         if (id === POD_OWNER) {
           const left = planet!.hitPod(POD_HITS); progress.podHits = POD_HITS - left;
           if (left) sfx.clink(); buzz(i, 1, 90);
-        } else if (id >= BOULDER_OWNER) {
-          const left = planet!.hitBoulder(id - BOULDER_OWNER);
+        } else if (id >= CRYSTAL_OWNER) {
+          const left = planet!.hitCrystal(id - CRYSTAL_OWNER, progress.has('pickaxe') ? 1 : CRYSTAL_HITS);
           if (left) sfx.clink(); buzz(i, 1, 90);
-        } else if (planet!.fellTree(id, headW)) { sfx.chop(); buzz(i, 1, 90); }
+        } else if (id >= BOULDER_OWNER) {
+          const left = planet!.hitBoulder(id - BOULDER_OWNER, progress.has('pickaxe') ? 1 : BOULDER_HITS);
+          if (left) sfx.clink(); buzz(i, 1, 90);
+        } else {
+          const left = planet!.hitTree(id, headW, progress.has('axe') ? 1 : TREE_HITS);
+          sfx.chop(); buzz(i, 1, 90);
+          if (left > 0) toast(`${left} more hit`, new THREE.Vector3(planet!.trees[id].x, planet!.trees[id].y + 2, planet!.trees[id].z));
+        }
       });
     }
 
@@ -354,7 +397,7 @@ async function boot() {
       hoverTarget[pointer] = hit ? targets[hit.index] : null;
       if (hit && hubUi && targets[hit.index] === hubUi.bench) progress.benchOpened = true;
     };
-    if (inXR) lasers.forEach((l, i) => setHover(i, l.castMany(meshes, placing)));
+    if (inXR) lasers.forEach((l, i) => setHover(i, l.castMany(meshes, !!placing)));
     else {
       lasers.forEach(l => l.hide());
       mouseRay.setFromCamera(mouse, camera);
@@ -390,7 +433,7 @@ async function boot() {
     }
     if (hubUi) { hubUi.bench.update(); hubUi.computer.update(dt); }
 
-    // Hub placement ghost follows your aim
+    // Placement ghost follows your aim
     if (placing && ghost && planet) {
       let o: THREE.Vector3, d: THREE.Vector3;
       if (inXR) {
@@ -401,12 +444,13 @@ async function boot() {
       const hit = aimAtTerrain(o, d);
       ghost.group.visible = !!hit;
       if (hit) {
-        const yawH = Math.round(Math.atan2(-fwd.z, fwd.x) / (Math.PI / 12)) * (Math.PI / 12); // long axis along your facing
-        const res = planet.canPlaceHub(hit.x, hit.z, yawH);
-        if (res.ok && Math.hypot(hit.x - headW.x, hit.z - headW.z) < 8) { res.ok = false; res.reason = 'Too close: step back'; }
-        ghostPose = { x: hit.x, z: hit.z, y: res.y, yaw: yawH, ok: res.ok, reason: res.reason };
-        ghost.group.position.set(hit.x, res.y, hit.z); ghost.group.rotation.y = yawH;
-        (ghost.group.userData.ghostMaterial as THREE.MeshBasicMaterial).color.set(res.ok ? 0x55ff88 : 0xff5555);
+        const snap = Math.PI / 12;
+        const yawH = Math.round(Math.atan2(-fwd.z, fwd.x) / snap) * snap; // hub: long axis along your facing
+        const res = placing === 'hub' ? planet.canPlaceHub(hit.x, hit.z, yawH) : planet.canPlaceProp(hit.x, hit.z);
+        if (res.ok && placing === 'hub' && Math.hypot(hit.x - headW.x, hit.z - headW.z) < 8) { res.ok = false; res.reason = 'Too close: step back'; }
+        ghostPose = { x: hit.x, z: hit.z, y: res.y, yaw: placing === 'hub' ? yawH : 0, ok: res.ok, reason: res.reason };
+        ghost.group.position.set(hit.x, res.y, hit.z); ghost.group.rotation.y = ghostPose.yaw;
+        (ghost.group.userData.ghostMaterial as THREE.MeshBasicMaterial | undefined)?.color.set(res.ok ? 0x55ff88 : 0xff5555);
       } else ghostPose = null;
     }
 
@@ -430,7 +474,7 @@ async function boot() {
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    progress, craft, tryPlaceHub, setPanel, renderer, scene, player, story, settings, menu,
+    progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },
     get placing() { return placing; }, get ghostPose() { return ghostPose; }, get hubUi() { return hubUi; },

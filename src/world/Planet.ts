@@ -3,17 +3,22 @@ import { CollisionWorld } from '../physics/CollisionWorld';
 import { Animal, makeGround, makeFlyer } from './Animals';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { buildHubMesh, addHubColliders, HUB_RADIUS, HubMesh, HubPose } from './Hub';
+import { buildCampfire, buildLamp, PropKind, PropMesh } from './Props';
 import { heightAt, buildTerrainMesh, pathMask, PONDS, LAKE, pondY, WATER_Y } from './Terrain';
 
 export interface TreeRec {
   pine: boolean; x: number; y: number; z: number; h: number;
   color: number; trunkIdx: number; foliageIdx: number; felled: boolean;
   trunkLocal: THREE.Matrix4; foliageLocal: THREE.Matrix4;
+  hits: number; lastHit: number;
 }
 
 /** Collider owner ids: trees use their index; these are bases for other things. */
 export const POD_OWNER = 100000;
 export const BOULDER_OWNER = 200000;
+export const CRYSTAL_OWNER = 300000;
+
+interface CrystalRec { x: number; y: number; z: number; h: number; r: number; color: number; hits: number; broken: boolean }
 
 interface BoulderRec { x: number; y: number; z: number; r: number; hits: number; broken: boolean; matrix: THREE.Matrix4 }
 
@@ -96,6 +101,12 @@ export class Planet {
   onWood: ((amount: number, pos: THREE.Vector3) => void) | null = null;
   /** A felled tree hit the ground. */
   onTreeLanded: ((pos: THREE.Vector3) => void) | null = null;
+  private crystalRecs: CrystalRec[] = [];
+  private crystalMesh!: THREE.InstancedMesh;
+  private wobbling: { rec: TreeRec; t: number; axis: THREE.Vector3 }[] = [];
+  private propList: { kind: PropKind; x: number; z: number; mesh: PropMesh }[] = [];
+  /** Crystal broke: here is the amount. */
+  onCrystal: ((amount: number, pos: THREE.Vector3) => void) | null = null;
   private boulderRecs: BoulderRec[] = [];
   private boulderMesh!: THREE.InstancedMesh;
   private debris: { mesh: THREE.Mesh; vel: THREE.Vector3; spin: THREE.Vector3; t: number; life: number }[] = [];
@@ -250,7 +261,7 @@ export class Planet {
     let ci = 0, pi = 0;
     this.trunkMesh = trunks; this.canopyMesh = canopies; this.pineMesh = pines;
     spots.forEach((t, i) => {
-      const rec: TreeRec = { pine: t.pine, x: t.x, y: t.y, z: t.z, h: t.h, color: t.pine ? pinePal[t.c] : palette[t.c], trunkIdx: i, foliageIdx: t.pine ? pi : ci, felled: false, trunkLocal: new THREE.Matrix4(), foliageLocal: new THREE.Matrix4() };
+      const rec: TreeRec = { pine: t.pine, x: t.x, y: t.y, z: t.z, h: t.h, color: t.pine ? pinePal[t.c] : palette[t.c], trunkIdx: i, foliageIdx: t.pine ? pi : ci, felled: false, trunkLocal: new THREE.Matrix4(), foliageLocal: new THREE.Matrix4(), hits: 0, lastHit: -99 };
       this.treeRecs.push(rec);
       if (!t.pine) {
         const w = t.h * 0.1 + 0.6;
@@ -353,9 +364,11 @@ export class Planet {
     items.forEach((s, i) => {
       m.compose(new THREE.Vector3(s.x, s.y - 0.5, s.z), new THREE.Quaternion(), new THREE.Vector3(s.r, s.h, s.r));
       mesh.setMatrixAt(i, m); mesh.setColorAt(i, col.set(palette[s.c]));
-      this.world.addCylinder(s.x, s.z, s.y - 0.5, s.y + s.h * 0.8, s.r * 0.5, 0.05);
+      this.world.addCylinder(s.x, s.z, s.y - 0.5, s.y + s.h * 0.8, s.r * 0.5, 0.05, CRYSTAL_OWNER + i);
+      this.crystalRecs.push({ x: s.x, y: s.y, z: s.z, h: s.h, r: s.r, color: palette[s.c], hits: 0, broken: false });
       if (i % 3 === 0) this.marks.crystals.push([s.x, s.z]);
     });
+    this.crystalMesh = mesh;
     this.group.add(mesh);
   }
 
@@ -594,6 +607,84 @@ export class Planet {
   get creatures(): readonly Animal[] { return this.animals; }
   get podPosition(): THREE.Vector3 | null { return this.pod && this.podAlive ? this.pod.position : null; }
 
+  /** Matrix for a tree tilted by `angle` about `axis` at its base (used for the hit wobble). */
+  private setTreeTilt(rec: TreeRec, angle: number, axis: THREE.Vector3): void {
+    const base = new THREE.Matrix4().compose(new THREE.Vector3(rec.x, rec.y, rec.z), new THREE.Quaternion().setFromAxisAngle(axis, angle), new THREE.Vector3(1, 1, 1));
+    const fol = rec.pine ? this.pineMesh : this.canopyMesh;
+    this.trunkMesh.setMatrixAt(rec.trunkIdx, base.clone().multiply(rec.trunkLocal)); this.trunkMesh.instanceMatrix.needsUpdate = true;
+    fol.setMatrixAt(rec.foliageIdx, base.clone().multiply(rec.foliageLocal)); fol.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
+   * One punch on a tree. The tree shakes and drops leaves; after `needed` punches (2, or 1 with an axe)
+   * it falls. Returns punches left (0 = felled). Punches are forgotten after 8 s.
+   */
+  hitTree(id: number, from: THREE.Vector3, needed: number): number {
+    const rec = this.treeRecs[id];
+    if (!rec || rec.felled) return 0;
+    if (this.clock - rec.lastHit > 8) rec.hits = 0;
+    rec.lastHit = this.clock; rec.hits++;
+    if (rec.hits >= needed) { this.fellTree(id, from); return 0; }
+    const dir = new THREE.Vector3(rec.x - from.x, 0, rec.z - from.z); if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+    dir.normalize();
+    this.wobbling = this.wobbling.filter(w => w.rec !== rec);
+    this.wobbling.push({ rec, t: 0, axis: new THREE.Vector3(dir.z, 0, -dir.x) });
+    this.burst(new THREE.Vector3(rec.x, rec.y + rec.h * 0.9, rec.z), 5, rec.color, 0.25, 3);
+    return needed - rec.hits;
+  }
+
+  private updateWobble(dt: number): void {
+    for (let i = this.wobbling.length - 1; i >= 0; i--) {
+      const w = this.wobbling[i]; w.t += dt;
+      if (w.rec.felled) { this.wobbling.splice(i, 1); continue; }
+      const k = Math.max(0, 1 - w.t / 0.5);
+      this.setTreeTilt(w.rec, Math.sin(w.t * 38) * 0.07 * k, w.axis);
+      if (w.t >= 0.5) { this.setTreeTilt(w.rec, 0, w.axis); this.wobbling.splice(i, 1); }
+    }
+  }
+
+  /** Hit a crystal spire. Breaks after `needed` punches. Returns punches left (0 = broke). */
+  hitCrystal(i: number, needed: number): number {
+    const c = this.crystalRecs[i];
+    if (!c || c.broken) return 0;
+    c.hits++;
+    const at = new THREE.Vector3(c.x, c.y + Math.min(c.h * 0.4, 3), c.z);
+    if (c.hits < needed) { this.burst(at, 4, c.color, 0.14, 3); return needed - c.hits; }
+    c.broken = true;
+    this.world.removeOwner(CRYSTAL_OWNER + i);
+    this.crystalMesh.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); this.crystalMesh.instanceMatrix.needsUpdate = true;
+    this.burst(at, 10, c.color, 0.25, 5);
+    this.onCrystal?.(c.h > 8 ? 2 : 1, at);
+    return 0;
+  }
+
+  // ---------------- placeable props ----------------
+
+  get props(): readonly { kind: PropKind; x: number; z: number }[] { return this.propList; }
+  propCount(kind: PropKind): number { return this.propList.filter(p => p.kind === kind).length; }
+
+  /** Open, level, dry ground with nothing solid in the way? */
+  canPlaceProp(x: number, z: number): { ok: boolean; y: number; reason: string } {
+    const y = heightAt(x, z);
+    if (y < WATER_Y + 0.4) return { ok: false, y, reason: 'Too close to water' };
+    let lo = y, hi = y;
+    for (const [dx, dz] of [[0.8, 0], [-0.8, 0], [0, 0.8], [0, -0.8]]) { const h = heightAt(x + dx, z + dz); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+    if (hi - lo > 0.7) return { ok: false, y, reason: 'Ground too steep' };
+    if (this.world.distance(new THREE.Vector3(x, y + 0.9, z)) < 0.8) return { ok: false, y, reason: 'Something is in the way' };
+    return { ok: true, y, reason: '' };
+  }
+
+  placeProp(kind: PropKind, x: number, z: number): void {
+    const y = heightAt(x, z);
+    const mesh = kind === 'campfire' ? buildCampfire() : buildLamp();
+    mesh.group.position.set(x, y, z);
+    this.group.add(mesh.group);
+    if (kind === 'campfire') this.world.addSphere(new THREE.Vector3(x, y + 0.2, z), 0.5, 0.3);
+    else this.world.addCylinder(x, z, y, y + 3, 0.2, 0.2);
+    this.world.finalize();
+    this.propList.push({ kind, x, z, mesh });
+  }
+
   /**
    * Knock a tree down, away from `from`. It tips over in a second, lies there, and after 3 s
    * vanishes and `onWood` fires. Returns false if it was already felled.
@@ -651,12 +742,12 @@ export class Planet {
   }
 
   /** Hit a boulder. 3 hits break it into stone. Returns hits left (0 = broke). */
-  hitBoulder(i: number): number {
+  hitBoulder(i: number, needed = 3): number {
     const b = this.boulderRecs[i];
     if (!b || b.broken) return 0;
     b.hits++;
     const at = new THREE.Vector3(b.x, b.y + b.r * 0.5, b.z);
-    if (b.hits < 3) { this.burst(at, 3, 0x9a90a8, 0.15 * b.r, 2.5); return 3 - b.hits; }
+    if (b.hits < needed) { this.burst(at, 3, 0x9a90a8, 0.15 * b.r, 2.5); return needed - b.hits; }
     b.broken = true;
     this.world.removeOwner(BOULDER_OWNER + i);
     this.boulderMesh.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); this.boulderMesh.instanceMatrix.needsUpdate = true;
@@ -713,6 +804,8 @@ export class Planet {
 
   private updateFalling(dt: number): void {
     this.updateDebris(dt);
+    this.updateWobble(dt);
+    for (const pr of this.propList) pr.mesh.tick(this.animalTime);
     for (let i = this.falling.length - 1; i >= 0; i--) {
       const f = this.falling[i];
       f.t += dt;

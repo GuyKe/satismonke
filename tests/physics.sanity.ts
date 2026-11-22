@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CollisionWorld } from '../src/physics/CollisionWorld';
 import { GorillaPlayer } from '../src/player/GorillaPlayer';
 import { heightAt } from '../src/world/Terrain';
-import { Progress } from '../src/game/Progress';
+import { Progress, RECIPES } from '../src/game/Progress';
 import { ArmCalibration, REF_SPAN } from '../src/player/ArmCalibration';
 
 let failed = 0;
@@ -144,6 +144,15 @@ function swipe(slip: number): number {
   pr.add('wood', 10); pr.add('stone', 8); pr.add('steel', 8);
   check('hub objective says press X when affordable', pr.objective()[1] === 'Press X');
   check('lantern stays locked until 20 wood', !pr.recipe('lantern').unlocked(pr) && (pr.add('wood', 10), pr.recipe('lantern').unlocked(pr)));
+}
+
+// 10. More recipes
+{
+  const pr = new Progress();
+  check('ten recipes, three in the X menu', RECIPES.length === 10 && RECIPES.filter(r => r.where === 'x').length === 3);
+  check('campfire and lamp are repeatable', RECIPES.filter(r => r.repeatable).map(r => r.id).join() === 'campfire,lamp');
+  check('float core locked until 4 crystals', !pr.recipe('floatcore').unlocked(pr) && (pr.add('crystal', 4), pr.recipe('floatcore').unlocked(pr)));
+  check('crystal gloves need power gloves first', !pr.recipe('crystalgloves').unlocked(pr) && (pr.crafted.add('gloves'), pr.add('crystal', 4), pr.recipe('crystalgloves').unlocked(pr)));
 }
 
 console.log(failed ? `\n${failed} FAILED` : '\nall passed');

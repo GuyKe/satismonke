@@ -113,6 +113,9 @@ export class MapMenu extends Screen {
     for (const t of planet.trees) { if (t.felled) continue; ctx.fillStyle = t.pine ? '#1f9a7a' : '#46d9b0'; ctx.fillRect(X(t.x) - 2, Y(t.z) - 2, 4, 4); }
     ctx.fillStyle = '#ffffff';
     for (const a of planet.creatures) { if (a.group.visible) ctx.fillRect(X(a.group.position.x) - 1.5, Y(a.group.position.z) - 1.5, 3, 3); }
+    const hub = planet.hub;
+    if (hub) { ctx.save(); ctx.translate(X(hub.pose.x), Y(hub.pose.z)); ctx.rotate(-hub.pose.yaw); ctx.fillStyle = '#b8c4d8'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; const w = Math.max(8, 12.4 * k), d = Math.max(5, 5.4 * k); ctx.fillRect(-w / 2, -d / 2, w, d); ctx.strokeRect(-w / 2, -d / 2, w, d); ctx.restore(); }
+    for (const pr of planet.props) { ctx.fillStyle = pr.kind === 'campfire' ? '#ff8a30' : '#6ff0ff'; ctx.beginPath(); ctx.arc(X(pr.x), Y(pr.z), 5, 0, 7); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
     const pod = planet.podPosition;
     if (pod) { ctx.fillStyle = '#ff8a30'; ctx.fillRect(X(pod.x) - 6, Y(pod.z) - 6, 12, 12); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(X(pod.x) - 6, Y(pod.z) - 6, 12, 12); }
 
