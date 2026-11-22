@@ -44,6 +44,18 @@ export function buildMachineMesh(kind: MachineKind): MachineMesh {
       flame = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.9, 8), new THREE.MeshBasicMaterial({ color: 0xff8a30, transparent: true, opacity: 0.9, toneMapped: false })); flame.position.set(0, 1.55, 0); group.add(flame);
       light.position.set(0, 1.35, 0.9); break;
     }
+    case 'splitter': {
+      group.add(box(1.4, 0.9, 1.4, steel, 0, 0.45, 0), box(0.4, 0.5, 0.4, dark, 0, 1.15, 0));
+      for (const [dx, col] of [[-0.55, 0x6fe8ff], [0, 0xffd45a], [0.55, 0xff7a5a]] as [number, number][]) group.add(box(0.28, 0.12, 0.5, new THREE.MeshBasicMaterial({ color: col, toneMapped: false }), dx, 0.96, 0.75));
+      light.position.set(0, 1.5, 0); break;
+    }
+    case 'sink': {
+      group.add(box(1.8, 0.7, 1.8, dark, 0, 0.35, 0), cyl(0.7, 0.8, 0.8, steel, 0, 1.0, 0));
+      const blades = new THREE.Group(); blades.position.y = 1.42;
+      for (let i = 0; i < 4; i++) { const bl = box(1.3, 0.06, 0.18, new THREE.MeshStandardMaterial({ color: 0xc8d0e0, metalness: 0.8, roughness: 0.3 }), 0, 0, 0); bl.rotation.y = (i * Math.PI) / 4; blades.add(bl); }
+      group.add(blades); spin.push(blades);
+      light.position.set(0.7, 0.8, 0.9); break;
+    }
     case 'solar': {
       group.add(cyl(0.1, 0.14, 1.4, steel, 0, 0.7, 0));
       const panel = box(2.6, 0.08, 1.7, new THREE.MeshStandardMaterial({ color: 0x1a2a52, metalness: 0.6, roughness: 0.25, emissive: 0x0a1a40, emissiveIntensity: 0.6 }), 0, 1.6, 0);
@@ -74,6 +86,8 @@ export class FactoryView {
   private items: THREE.InstancedMesh;
   private tex = beltTexture();
   private t = 0;
+  /** Where the player is; machines far from here skip their animation. */
+  readonly focus = new THREE.Vector3();
   private static MAX_ITEMS = 700;
 
   constructor() {
@@ -168,9 +182,9 @@ export class FactoryView {
     for (const m of f.machines) {
       const mm = this.machines.get(m.id); if (!mm) continue;
       const on = m.active && f.power.ratio > 0;
-      for (const s of mm.spin) s.rotation.y += dt * (on ? 4 * f.power.ratio : 0);
+      if (mm.group.position.distanceToSquared(this.focus) < 70 * 70) for (const s of mm.spin) s.rotation.y += dt * (on ? 4 * f.power.ratio : 0); // far machines are just maths
       if (mm.flame) { const lit = m.fuel > 0; mm.flame.visible = lit; mm.flame.scale.set(1, 0.8 + 0.3 * Math.sin(this.t * 14), 1); }
-      const bad = m.status === 'No power' || m.status === 'Out of fuel' || m.status === 'Not on ore';
+      const bad = m.status === 'No power' || m.status === 'Out of fuel' || m.status === 'Not on ore' || m.status === 'Breaker tripped';
       const warn = m.status === 'Output blocked' || m.status === 'Waiting for input' || m.status === 'Low power' || m.status === 'Night' || m.status === 'Standby';
       (mm.light.material as THREE.MeshBasicMaterial).color.set(bad ? 0xff3030 : warn ? 0xffb030 : 0x40ff70);
     }

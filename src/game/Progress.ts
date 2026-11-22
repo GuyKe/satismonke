@@ -1,15 +1,16 @@
 export type Ore = 'copper' | 'iron' | 'gold' | 'plasma';
 export const ORES: Ore[] = ['copper', 'iron', 'gold', 'plasma'];
-export type Res = 'wood' | 'stone' | 'steel' | 'crystal' | Ore | 'plate' | 'wire';
+export type Res = 'wood' | 'stone' | 'steel' | 'crystal' | Ore | 'plate' | 'wire' | 'token' | 'core' | 'drive' | 'artifact';
 export type Cost = Partial<Record<Res, number>>;
 export type RecipeId = 'hub' | 'campfire' | 'pickaxe' | 'axe' | 'lantern' | 'gloves' | 'sticky' | 'floatcore' | 'crystalgloves' | 'lamp' | 'ironpick' | 'copperlantern' | 'scanner' | 'plasmacore'
-  | 'burner' | 'miner' | 'smelter' | 'constructor' | 'storage' | 'solar' | 'conveyor';
+  | 'burner' | 'miner' | 'smelter' | 'constructor' | 'storage' | 'solar' | 'conveyor'
+  | 'buildtool' | 'splitter' | 'sink' | 'beacon' | 'solarroof' | 'lab' | 'overclockst' | 'altplate' | 'altwire' | 'altsmelt' | 'efficiency';
 
 export interface Recipe {
   id: RecipeId;
   name: string;
   desc: string;
-  where: 'x' | 'bench';
+  where: 'x' | 'bench' | 'hub' | 'lab';
   cost: Cost;
   /** Placeable things can be made again and again. */
   repeatable?: boolean;
@@ -36,6 +37,8 @@ export const RECIPES: Recipe[] = [
     cost: { wood: 5, stone: 3 }, unlocked: always, lockedHint: noHint },
   { id: 'pickaxe', name: 'Stone Pickaxe', desc: 'Boulders and crystals break in 1 hit, +1 stone', where: 'x',
     cost: { wood: 3, stone: 4 }, unlocked: always, lockedHint: noHint },
+  { id: 'buildtool', name: 'Build Tool', desc: 'Foundations, walls and catwalks', where: 'x',
+    cost: {}, unlocked: p => p.hubPlaced, lockedHint: () => 'Place the Hub first' },
   // ---- Hub bench: unlock these as you explore ----
   { id: 'axe', name: 'Stone Axe', desc: 'Trees fall in 1 hit, +1 wood', where: 'bench',
     cost: { wood: 3, stone: 3 }, unlocked: always, lockedHint: noHint },
@@ -78,22 +81,48 @@ export const RECIPES: Recipe[] = [
     cost: {}, unlocked: p => p.made.miner! > 0, lockedHint: () => 'Build a Miner first' },
   { id: 'solar', name: 'Solar Panel', desc: 'Free power, but only in daylight', where: 'bench', repeatable: true,
     cost: { plate: 6, wire: 6, crystal: 2 }, unlocked: p => p.platesCollected >= 6, lockedHint: p => `Collect 6 plates (${Math.min(p.platesCollected, 6)}/6)` },
+  { id: 'splitter', name: 'Smart Splitter', desc: 'Filters items left/centre/right, with overflow', where: 'bench', repeatable: true,
+    cost: { plate: 6, wire: 4, iron: 6 }, unlocked: p => p.platesCollected >= 3, lockedHint: p => `Collect 3 plates (${Math.min(p.platesCollected, 3)}/3)` },
+  { id: 'sink', name: 'Resource Sink', desc: 'Shreds surplus into reward tokens', where: 'bench', repeatable: true,
+    cost: { plate: 8, wire: 6, steel: 2 }, unlocked: p => p.platesCollected >= 6, lockedHint: p => `Collect 6 plates (${Math.min(p.platesCollected, 6)}/6)` },
+  // ---- Hub upgrades (the Hub's upgrade screen) ----
+  { id: 'beacon', name: 'Signal Beacon', desc: 'A towering beam you can see from anywhere', where: 'hub',
+    cost: { steel: 4, crystal: 2 }, unlocked: always, lockedHint: noHint },
+  { id: 'solarroof', name: 'Solar Roof', desc: '+1.2 MW of daytime power for your grid', where: 'hub',
+    cost: { plate: 12, wire: 8, crystal: 4 }, unlocked: p => p.platesCollected >= 6, lockedHint: p => `Collect 6 plates (${Math.min(p.platesCollected, 6)}/6)` },
+  { id: 'lab', name: 'Research Lab', desc: 'Research better recipes with data drives', where: 'hub',
+    cost: { plate: 10, wire: 10, crystal: 2 }, unlocked: p => p.lootOpened >= 1, lockedHint: () => 'Open a crashed pod first' },
+  { id: 'overclockst', name: 'Overclock Station', desc: 'Spend cores to overclock machines', where: 'hub',
+    cost: { plate: 8, wire: 8, steel: 3 }, unlocked: p => p.has('lab'), lockedHint: () => 'Build the Research Lab first' },
+  // ---- Research (needs the lab; recipes that need data drives) ----
+  { id: 'altplate', name: 'Coated Plates', desc: 'Constructors make 50% more plates', where: 'lab',
+    cost: { drive: 1, plate: 10 }, unlocked: p => p.has('lab'), lockedHint: () => 'Build the Research Lab' },
+  { id: 'altwire', name: 'Braided Wire', desc: '3 wire per copper ingot instead of 2', where: 'lab',
+    cost: { drive: 1, wire: 10 }, unlocked: p => p.has('lab'), lockedHint: () => 'Build the Research Lab' },
+  { id: 'altsmelt', name: 'Fast Smelting', desc: 'Smelters finish an ingot in 1.5 s', where: 'lab',
+    cost: { drive: 1, steel: 2, stone: 10 }, unlocked: p => p.has('lab'), lockedHint: () => 'Build the Research Lab' },
+  { id: 'efficiency', name: 'Efficient Motors', desc: 'All machines use 20% less power', where: 'lab',
+    cost: { drive: 1, plate: 8, crystal: 2 }, unlocked: p => p.has('lab'), lockedHint: () => 'Build the Research Lab' },
 ];
 
-const label: Record<Res, string> = { wood: 'wood', stone: 'stone', steel: 'steel', crystal: 'crystal', copper: 'copper', iron: 'iron', gold: 'gold', plasma: 'plasma', plate: 'plate', wire: 'wire' };
+const label: Record<Res, string> = { token: 'token', core: 'core', drive: 'drive', artifact: 'artifact', wood: 'wood', stone: 'stone', steel: 'steel', crystal: 'crystal', copper: 'copper', iron: 'iron', gold: 'gold', plasma: 'plasma', plate: 'plate', wire: 'wire' };
 
 export interface ProgressData {
   items: Record<Res, number>; mined: Record<Ore, number>; totalWood: number; totalCrystal: number; treesFelled: number; bouldersBroken: number;
-  made: Partial<Record<RecipeId, number>>; links?: number; fueled?: boolean; platesCollected?: number; podHits: number; podDestroyed: boolean; hubPlaced: boolean; benchOpened: boolean; gamePlayed: boolean; crafted: string[];
+  made: Partial<Record<RecipeId, number>>; links?: number; fueled?: boolean; platesCollected?: number; lootOpened?: number; piecesBuilt?: number; colors?: number[]; podHits: number; podDestroyed: boolean; hubPlaced: boolean; benchOpened: boolean; gamePlayed: boolean; crafted: string[];
 }
 
 /** Inventory, unlock counters and the objective text. In-memory only (not saved yet). */
 export class Progress {
-  items: Record<Res, number> = { wood: 0, stone: 0, steel: 0, crystal: 0, copper: 0, iron: 0, gold: 0, plasma: 0, plate: 0, wire: 0 };
+  items: Record<Res, number> = { token: 0, core: 0, drive: 0, artifact: 0, wood: 0, stone: 0, steel: 0, crystal: 0, copper: 0, iron: 0, gold: 0, plasma: 0, plate: 0, wire: 0 };
   /** Factory progress */
   links = 0;
   fueled = false;
   platesCollected = 0;
+  lootOpened = 0;
+  piecesBuilt = 0;
+  /** Cosmetic building colours bought with tokens (indices into the palette). */
+  colors: number[] = [];
   mined: Record<Ore, number> = { copper: 0, iron: 0, gold: 0, plasma: 0 };
   totalWood = 0;
   totalCrystal = 0;
@@ -112,13 +141,13 @@ export class Progress {
   /** Back to a fresh game (keeps the same object so panels holding it stay valid). */
   reset(): void {
     const f = new Progress();
-    Object.assign(this, { items: f.items, mined: f.mined, links: 0, fueled: false, platesCollected: 0, totalWood: 0, totalCrystal: 0, treesFelled: 0, bouldersBroken: 0, made: {}, podHits: 0, podDestroyed: false, hubPlaced: false, benchOpened: false, gamePlayed: false, crafted: new Set<string>() });
+    Object.assign(this, { items: f.items, mined: f.mined, links: 0, fueled: false, platesCollected: 0, lootOpened: 0, piecesBuilt: 0, colors: [], totalWood: 0, totalCrystal: 0, treesFelled: 0, bouldersBroken: 0, made: {}, podHits: 0, podDestroyed: false, hubPlaced: false, benchOpened: false, gamePlayed: false, crafted: new Set<string>() });
   }
 
   toJSON(): ProgressData {
     return { items: { ...this.items }, mined: { ...this.mined }, totalWood: this.totalWood, totalCrystal: this.totalCrystal, treesFelled: this.treesFelled,
       bouldersBroken: this.bouldersBroken, made: { ...this.made }, podHits: this.podHits, podDestroyed: this.podDestroyed, hubPlaced: this.hubPlaced,
-      benchOpened: this.benchOpened, gamePlayed: this.gamePlayed, crafted: [...this.crafted], links: this.links, fueled: this.fueled, platesCollected: this.platesCollected };
+      benchOpened: this.benchOpened, gamePlayed: this.gamePlayed, crafted: [...this.crafted], links: this.links, fueled: this.fueled, platesCollected: this.platesCollected, lootOpened: this.lootOpened, piecesBuilt: this.piecesBuilt, colors: [...this.colors] };
   }
 
   load(d: ProgressData): void {
@@ -128,6 +157,7 @@ export class Progress {
     this.podHits = d.podHits; this.podDestroyed = d.podDestroyed; this.hubPlaced = d.hubPlaced; this.benchOpened = d.benchOpened; this.gamePlayed = d.gamePlayed;
     this.crafted = new Set(d.crafted);
     this.links = d.links ?? 0; this.fueled = d.fueled ?? false; this.platesCollected = d.platesCollected ?? 0;
+    this.lootOpened = d.lootOpened ?? 0; this.piecesBuilt = d.piecesBuilt ?? 0; this.colors = d.colors ?? [];
   }
 
   add(r: Res, n: number): void { this.items[r] += n; if (r === 'wood') this.totalWood += n; if (r === 'crystal') this.totalCrystal += n; }
@@ -185,6 +215,7 @@ export class Progress {
     if (this.links < 2) return ['Link Smelter to Constructor', 'Conveyor Link, then aim and trigger'];
     if (this.count('storage') === 0) return ['Build a Storage Box', 'Link the Constructor to it'];
     if (this.platesCollected < 6) return ['Collect 6 plates', 'Aim at the Storage Box: TAKE ALL'];
+    if (this.piecesBuilt < 3) return ['Build a platform', 'X: Build Tool, then foundations and walls'];
     if (this.oresMined === 0) return ['Find some ore', 'Grip + punch an ore rock'];
     const iron = this.recipe('ironpick');
     if (!this.has('ironpick')) return iron.unlocked(this) ? ['Craft the Iron Pickaxe', this.describeMissing(iron.cost) || 'Use the bench'] : ['Unlock the Iron Pickaxe', iron.lockedHint(this)];

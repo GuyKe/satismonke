@@ -23,6 +23,7 @@ export const BOULDER_OWNER = 200000;
 export const CRYSTAL_OWNER = 300000;
 export const ORE_OWNER = 400000;
 export const MACHINE_OWNER = 500000;
+export const CRASH_OWNER = 700000;
 
 /** Ore deposits: colour, punches to break by hand, and how much they give. */
 export const ORE_DEF: Record<Ore, { color: number; rock: number; hits: number; yield: [number, number]; glow: number }> = {
@@ -31,7 +32,9 @@ export const ORE_DEF: Record<Ore, { color: number; rock: number; hits: number; y
   gold: { color: 0xffd23a, rock: 0x5c554a, hits: 3, yield: [1, 2], glow: 0.3 },
   plasma: { color: 0xc04dff, rock: 0x362b48, hits: 4, yield: [1, 1], glow: 1.4 },
 };
-interface OreRec { type: Ore; x: number; y: number; z: number; r: number; hits: number; broken: boolean; slot: number }
+interface OreRec { type: Ore; x: number; y: number; z: number; r: number; hits: number; broken: boolean; slot: number; purity: number }
+export type Loot = Partial<Record<'steel' | 'plate' | 'wire' | 'crystal' | 'core' | 'drive' | 'artifact', number>>;
+interface SiteRec { x: number; y: number; z: number; hits: number; looted: boolean; discovered: boolean; loot: Loot }
 
 interface CrystalRec { x: number; y: number; z: number; h: number; r: number; color: number; hits: number; broken: boolean }
 
@@ -96,6 +99,49 @@ function saturnTextures(): { body: THREE.CanvasTexture; ring: THREE.CanvasTextur
 
 function rngFromSeed(seed: number) { return rngFrom(seed); }
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+const SKY_FRAG = /* glsl */ `
+  varying vec3 vDir;
+  uniform vec3 uSun, uHorizon, uZenith, uSunCol;
+  uniform float uDay, uNight, uDusk, uTime;
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+  float fbm(vec2 p){ float v = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { v += a * noise(p); p = p * 2.03 + vec2(1.7, 9.2); a *= 0.5; } return v; }
+  void main(){
+    vec3 d = normalize(vDir);
+    float h = d.y;
+    vec3 col = h < 0.0 ? uHorizon : mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.5));
+    float sd = max(dot(d, uSun), 0.0);
+    col += uSunCol * (pow(sd, 5.0) * 0.35 + pow(sd, 40.0) * 0.6) * (0.25 + 0.75 * uDay);
+    // sunset and sunrise: warm bands that hug the horizon on the side of the sun
+    vec3 hz = normalize(vec3(d.x, 0.0001, d.z)), sz = normalize(vec3(uSun.x, 0.0001, uSun.z));
+    float toward = pow(max(dot(hz, sz), 0.0), 2.5);
+    float band = exp(-abs(h) * 9.0) * toward * uDusk;
+    col += mix(vec3(1.0, 0.32, 0.38), vec3(1.0, 0.68, 0.25), smoothstep(0.0, 0.35, h) * 2.0) * band * 1.15;
+    col += vec3(0.8, 0.3, 0.7) * exp(-pow((h - 0.22) * 5.0, 2.0)) * toward * uDusk * 0.35;
+    // drifting clouds, lit from the sun's side
+    if (h > 0.015) {
+      vec2 p = d.xz / (h + 0.18) * 1.4 + vec2(uTime * 0.012, uTime * 0.004);
+      float n = fbm(p) + 0.35 * fbm(p * 3.1 - uTime * 0.02);
+      float c = smoothstep(0.62, 0.95, n) * smoothstep(0.015, 0.25, h);
+      vec3 lit = mix(vec3(0.95, 0.9, 1.0), uSunCol * 1.2, 0.35 + 0.45 * uDusk);
+      vec3 shade = mix(uZenith * 1.2 + 0.15, vec3(0.5, 0.3, 0.55), uDusk);
+      vec3 cc = mix(shade, lit, clamp(0.4 + 0.6 * pow(sd, 1.5) + 0.3 * uDay, 0.0, 1.0));
+      cc *= mix(0.25, 1.0, clamp(uDay + uDusk * 0.5, 0.0, 1.0));
+      col = mix(col, cc, c * 0.85);
+    }
+    // aurora curtains in the north on clear nights
+    if (uNight > 0.05 && h > 0.05) {
+      float az = atan(d.x, -d.z);
+      float curtain = noise(vec2(az * 3.0 + uTime * 0.08, h * 2.0 - uTime * 0.05));
+      float b2 = smoothstep(0.35, 0.55, curtain) * smoothstep(0.05, 0.2, h) * smoothstep(0.7, 0.25, h);
+      float flick = 0.6 + 0.4 * sin(uTime * 0.7 + az * 5.0);
+      vec3 ac = mix(vec3(0.2, 1.0, 0.6), vec3(0.8, 0.3, 1.0), smoothstep(0.1, 0.5, h));
+      col += ac * b2 * flick * uNight * 0.55 * smoothstep(-1.2, 0.2, -abs(az) + 1.3);
+    }
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+
 const hash3 = (x: number, y: number, z: number) => { const s = Math.sin(x * 12.9898 + y * 78.233 + z * 37.719) * 43758.5453; return s - Math.floor(s); };
 
 /** The alien planet: rolling hills, lakes, spaced trees, crystals, floating rocks, strange animals, Saturn as the sun. */
@@ -128,6 +174,14 @@ export class Planet {
   onTreeLanded: ((pos: THREE.Vector3) => void) | null = null;
   private oreRecs: OreRec[] = [];
   private oreOccupied = new Set<number>();
+  private siteRecs: SiteRec[] = [];
+  private siteMesh!: THREE.InstancedMesh;
+  private siteLights!: THREE.InstancedMesh;
+  /** Loot from a crashed pod you just opened. */
+  onLoot: ((index: number, loot: Loot, pos: THREE.Vector3) => void) | null = null;
+  private hubBeam: THREE.Mesh | null = null;
+  private beaconOn = false;
+  private skyDome!: THREE.Mesh;
   private dayF = 1;
   private oreMeshes = {} as Record<Ore, { rock: THREE.InstancedMesh; specks: THREE.InstancedMesh }>;
   private mesaTops: number[] = [];
@@ -167,6 +221,10 @@ export class Planet {
   private skyDay = new THREE.Color(0xb79af0);
   private skyDusk = new THREE.Color(0xff8a6a);
   private skyNight = new THREE.Color(0x070618);
+  private tmpCol2 = new THREE.Color();
+  private zenDay = new THREE.Color(0x6a58c8); private zenDusk = new THREE.Color(0x44307a); private zenNight = new THREE.Color(0x03020c);
+  private sunDay = new THREE.Color(0xffe2a8); private sunDusk = new THREE.Color(0xff6a30);
+  private hemiDay = new THREE.Color(0xc9a8ff); private hemiDusk = new THREE.Color(0xff9a90); private hemiNight = new THREE.Color(0x5a60c0);
 
   private q: (typeof QUALITY)['medium'];
   private nightF = 0;
@@ -196,6 +254,7 @@ export class Planet {
     this.buildMesas(rng);
     this.buildCrystals(rng);
     this.buildOres(rng);
+    this.buildCrashSites(rng);
     this.buildFloatingRocks(rng);
     this.buildMushrooms(rng);
     this.buildMountains(rng);
@@ -219,6 +278,17 @@ export class Planet {
     rm.rotation.x = -Math.PI / 2 + 0.38;
     this.saturn.add(rm);
     this.celestial.add(this.saturn);
+    // The sky itself: a dome shader with sunsets, clouds and aurora
+    this.skyDome = new THREE.Mesh(new THREE.SphereGeometry(2300, 40, 20),
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide, depthWrite: false, fog: false,
+        uniforms: { uSun: { value: new THREE.Vector3(0, 1, 0) }, uHorizon: { value: new THREE.Color() }, uZenith: { value: new THREE.Color() }, uSunCol: { value: new THREE.Color() },
+          uDay: { value: 1 }, uNight: { value: 0 }, uDusk: { value: 0 }, uTime: { value: 0 } },
+        vertexShader: 'varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader: SKY_FRAG,
+      }));
+    this.skyDome.renderOrder = -10; this.skyDome.frustumCulled = false;
+    this.celestial.add(this.skyDome);
 
     this.moon = new THREE.Mesh(new THREE.SphereGeometry(28, 24, 16),
       new THREE.MeshBasicMaterial({ color: 0xcfe9ff, toneMapped: false, fog: false }));
@@ -490,7 +560,8 @@ export class Planet {
         m.compose(new THREE.Vector3(s.x, s.y + s.r * 0.3, s.z), q, new THREE.Vector3(s.r, s.r * 0.75, s.r));
         rock.setMatrixAt(k, m); specks.setMatrixAt(k, m);
         this.world.addSphere(new THREE.Vector3(s.x, s.y + s.r * 0.35, s.z), s.r * 0.85, 0.3, ORE_OWNER + slot);
-        this.oreRecs.push({ type, x: s.x, y: s.y, z: s.z, r: s.r, hits: 0, broken: false, slot: k });
+        const pr = rng();
+        this.oreRecs.push({ type, x: s.x, y: s.y, z: s.z, r: s.r, hits: 0, broken: false, slot: k, purity: pr < 0.3 ? 0.5 : pr < 0.8 ? 1 : 2 });
       });
       this.oreMeshes[type] = { rock, specks };
       this.group.add(rock, specks);
@@ -501,12 +572,12 @@ export class Planet {
   get daylight(): number { return this.dayF; }
 
   /** Nearest unmined, unoccupied copper or iron deposit within `maxD` of (x, z): where a Miner can go. */
-  findFreeOre(x: number, z: number, maxD: number): { index: number; type: 'copper' | 'iron'; x: number; y: number; z: number } | null {
-    let best: { index: number; type: 'copper' | 'iron'; x: number; y: number; z: number } | null = null, bd = maxD;
+  findFreeOre(x: number, z: number, maxD: number): { index: number; type: 'copper' | 'iron'; x: number; y: number; z: number; purity: number } | null {
+    let best: { index: number; type: 'copper' | 'iron'; x: number; y: number; z: number; purity: number } | null = null, bd = maxD;
     this.oreRecs.forEach((o, i) => {
       if (o.broken || this.oreOccupied.has(i) || (o.type !== 'copper' && o.type !== 'iron')) return;
       const d = Math.hypot(o.x - x, o.z - z);
-      if (d < bd) { bd = d; best = { index: i, type: o.type, x: o.x, y: o.y + o.r * 0.55, z: o.z }; }
+      if (d < bd) { bd = d; best = { index: i, type: o.type, x: o.x, y: o.y + o.r * 0.55, z: o.z, purity: o.purity }; }
     });
     return best;
   }
@@ -529,8 +600,80 @@ export class Planet {
   }
   removeMachineCollider(id: number): void { this.world.removeOwner(MACHINE_OWNER + id); }
 
+  /** Other crashed pods scattered around the world. Punch the hatch three times to open one. */
+  private buildCrashSites(rng: () => number): void {
+    const N = Math.round(16 * this.q.rocks);
+    const hull = new THREE.CapsuleGeometry(0.62, 0.9, 5, 14).rotateX(Math.PI / 2);
+    const parts: THREE.BufferGeometry[] = [];
+    const tint = (g: THREE.BufferGeometry, c: number, k = 1) => {
+      const col = new THREE.Color(c), n = g.attributes.position.count, a = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) { a[i * 3] = col.r * k; a[i * 3 + 1] = col.g * k; a[i * 3 + 2] = col.b * k; }
+      g.setAttribute('color', new THREE.BufferAttribute(a, 3)); return g;
+    };
+    const plain = (g: THREE.BufferGeometry) => { const x = g.index ? g.toNonIndexed() : g; for (const k of Object.keys(x.attributes)) if (!['position', 'normal', 'uv', 'color'].includes(k)) x.deleteAttribute(k); return x; };
+    parts.push(plain(tint(hull.clone().translate(0, 0.55, 0).rotateX(-0.25), 0x8a96aa)));
+    parts.push(plain(tint(new THREE.BoxGeometry(0.7, 0.07, 0.5).translate(0.2, 1.05, 0.2).rotateZ(-0.3), 0x3a4252)));      // blown hatch panel
+    parts.push(plain(tint(new THREE.CircleGeometry(2.0, 18).rotateX(-Math.PI / 2).translate(0, 0.04, 0), 0x2a1c24)));       // scorched ground
+    parts.push(plain(tint(new THREE.CylinderGeometry(0.03, 0.04, 2.2, 6).translate(0.9, 1.1, -0.6), 0x59606e)));           // beacon pole
+    const geo = mergeGeometries(parts)!;
+    this.siteMesh = new THREE.InstancedMesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.4, roughness: 0.55 }), N);
+    this.siteLights = new THREE.InstancedMesh(new THREE.SphereGeometry(0.14, 8, 6), new THREE.MeshBasicMaterial({ toneMapped: false }), N);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), pos = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+    let made = 0;
+    for (let i = 0; i < N; i++) {
+      const p = this.dryPoint(rng, 90, WORLD_R - 30, ABOVE_WATER + 1);
+      if (this.siteRecs.some(s => Math.hypot(s.x - p.x, s.z - p.z) < 60)) continue;
+      const yaw = rng() * Math.PI * 2;
+      m.compose(pos.set(p.x, p.h, p.z), q.setFromEuler(new THREE.Euler(0, yaw, 0)), one);
+      this.siteMesh.setMatrixAt(made, m);
+      const bx = p.x + Math.cos(yaw) * 0.9 + Math.sin(yaw) * -0.6, bz = p.z - Math.sin(yaw) * 0.9 + Math.cos(yaw) * -0.6;
+      this.siteLights.setMatrixAt(made, new THREE.Matrix4().makeTranslation(bx, p.h + 2.25, bz));
+      this.siteLights.setColorAt(made, new THREE.Color(0xff3030));
+      const loot: Loot = { steel: 3 + Math.floor(rng() * 6), plate: Math.floor(rng() * 6), wire: Math.floor(rng() * 5), crystal: Math.floor(rng() * 4) };
+      if (rng() < 0.35) loot.core = 1;
+      if (rng() < 0.4) loot.drive = 1;
+      if (rng() < 0.18) loot.artifact = 1;
+      this.world.addSphere(new THREE.Vector3(p.x, p.h + 0.7, p.z), 0.95, 0.3, CRASH_OWNER + made);
+      this.siteRecs.push({ x: p.x, y: p.h, z: p.z, hits: 0, looted: false, discovered: false, loot });
+      made++;
+    }
+    this.siteMesh.count = this.siteLights.count = made;
+    this.siteMesh.frustumCulled = this.siteLights.frustumCulled = false;
+    this.group.add(this.siteMesh, this.siteLights);
+  }
+
+  /** Crashed pods you have found and not yet looted (for the map). */
+  get siteMarks(): { x: number; z: number }[] { return this.siteRecs.filter(s => s.discovered && !s.looted); }
+
+  /** Punch a crashed pod's hatch. Returns punches left (0 = opened). */
+  hitSite(i: number): number {
+    const s = this.siteRecs[i];
+    if (!s || s.looted) return 0;
+    s.hits++;
+    const at = new THREE.Vector3(s.x, s.y + 1.0, s.z);
+    if (s.hits < 3) { this.burst(at, 3, 0x8a96aa, 0.12, 3); return 3 - s.hits; }
+    s.looted = true;
+    this.world.removeOwner(CRASH_OWNER + i);
+    this.burst(at, 12, 0x8a96aa, 0.22, 6);
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+    this.siteMesh.setMatrixAt(i, zero); this.siteLights.setMatrixAt(i, zero);
+    this.siteMesh.instanceMatrix.needsUpdate = this.siteLights.instanceMatrix.needsUpdate = true;
+    this.onLoot?.(i, s.loot, at);
+    return 0;
+  }
+
+  /** The Hub's beacon: a tall beam you can see from far away. `strong` is the upgraded version. */
+  setBeacon(strong: boolean): void {
+    this.beaconOn = strong;
+    if (!this.hubBeam || !this.hub) return;
+    const h = strong ? 700 : 70, r = strong ? 1.6 : 0.5;
+    this.hubBeam.geometry.dispose();
+    this.hubBeam.geometry = new THREE.CylinderGeometry(r, r, h, 12, 1, true);
+    this.hubBeam.position.set(this.hub.pose.x, this.hub.pose.y + h / 2, this.hub.pose.z);
+  }
+
   /** Unmined ore deposits (for the Ore Scanner on the map). */
-  get oreMarks(): { type: Ore; x: number; z: number }[] { return this.oreRecs.filter(o => !o.broken); }
+  get oreMarks(): { type: Ore; x: number; z: number; purity: number }[] { return this.oreRecs.filter(o => !o.broken); }
 
   /** Hit an ore deposit. `tool` decides how many punches it takes. Returns punches left (0 = mined). */
   hitOre(i: number, tool: 'hand' | 'pick' | 'iron'): number {
@@ -569,6 +712,7 @@ export class Planet {
       podHead: [this.podHead.x, this.podHead.y, this.podHead.z], podForward: [this.podForward.x, this.podForward.y, this.podForward.z],
       hub: this.hub ? { ...this.hub.pose } : null,
       props: this.propList.map(p => ({ kind: p.kind, x: p.x, z: p.z })),
+      lootedSites: ids(this.siteRecs.map(s => ({ broken: s.looted }))), discoveredSites: this.siteRecs.flatMap((s, i) => (s.discovered ? [i] : [])),
     };
   }
 
@@ -587,6 +731,9 @@ export class Planet {
     for (const i of s.brokenCrystals) { const c = this.crystalRecs[i]; if (!c) continue; c.broken = true; owners.add(CRYSTAL_OWNER + i); this.crystalMesh.setMatrixAt(i, zero); }
     this.crystalMesh.instanceMatrix.needsUpdate = true;
     for (const i of s.brokenOres) { const o = this.oreRecs[i]; if (!o) continue; o.broken = true; owners.add(ORE_OWNER + i); this.hideOre(o); }
+    for (const i of s.lootedSites ?? []) { const t = this.siteRecs[i]; if (!t) continue; t.looted = true; owners.add(CRASH_OWNER + i); this.siteMesh.setMatrixAt(i, zero); this.siteLights.setMatrixAt(i, zero); }
+    for (const i of s.discoveredSites ?? []) { const t = this.siteRecs[i]; if (t) t.discovered = true; }
+    this.siteMesh.instanceMatrix.needsUpdate = this.siteLights.instanceMatrix.needsUpdate = true;
     this.world.removeOwners(owners);
     this.podAlive = s.podAlive;
     if (s.hub) this.placeHub(s.hub.x, s.hub.z, s.hub.yaw, s.hub.y);
@@ -750,8 +897,26 @@ export class Planet {
     this.sun.position.copy(follow).addScaledVector(dir, 300);
     this.sun.target.position.copy(follow);
     this.sun.intensity = 2.3 * day;
-    this.hemi.intensity = 0.3 + 0.9 * day;
+    this.hemi.intensity = 0.3 + 0.9 * day + 0.55 * dusk * (elev > -0.15 ? 1 : 0); // warm ambient glow keeps the land lit at sunset
 
+    // sky dome, light colour and water tint follow the time of day (warm and pink near the horizon)
+    const duskAmt = dusk * (elev > -0.15 ? 1 : 0);
+    const u = (this.skyDome.material as THREE.ShaderMaterial).uniforms;
+    u.uSun.value.copy(dir); u.uHorizon.value.copy(sky);
+    u.uZenith.value.copy(this.zenNight).lerp(this.zenDay, day).lerp(this.zenDusk, duskAmt * 0.6);
+    u.uSunCol.value.copy(this.sunDay).lerp(this.sunDusk, Math.min(1, duskAmt * 1.4));
+    u.uDay.value = day; u.uNight.value = night; u.uDusk.value = duskAmt; u.uTime.value = this.clock;
+    this.sun.color.copy(this.sunDay).lerp(this.sunDusk, Math.min(1, duskAmt * 1.3));
+    this.hemi.color.copy(this.hemiDay).lerp(this.hemiDusk, duskAmt).lerp(this.hemiNight, night);
+    this.hemi.groundColor.setHex(0x7a3a8a).lerp(this.tmpCol2.setHex(0xb0506a), duskAmt);
+    const wm = this.water.material as THREE.MeshStandardMaterial;
+    wm.color.setHex(0x3fd6e6).lerp(this.tmpCol2.setHex(0xff9a7a), duskAmt * 0.55).lerp(this.tmpCol2.setHex(0x0b3a6a), night);
+    wm.emissive.setHex(0x0a6a78).lerp(this.tmpCol2.setHex(0x6a2a40), duskAmt * 0.5).lerp(this.tmpCol2.setHex(0x0a3a6a), night);
+    wm.emissiveIntensity = 0.35 + 0.5 * night + 0.25 * duskAmt;
+
+    for (const s of this.siteRecs) if (!s.discovered && Math.hypot(s.x - head.x, s.z - head.z) < 120) s.discovered = true;
+    if (this.siteLights && this.siteRecs.length) { const on = Math.sin(this.animalTime * 4) > 0.2; const c = new THREE.Color(on ? 0xff3030 : 0x401010); for (let i = 0; i < this.siteRecs.length; i++) this.siteLights.setColorAt(i, c); if (this.siteLights.instanceColor) this.siteLights.instanceColor.needsUpdate = true; }
+    if (this.hubBeam) (this.hubBeam.material as THREE.MeshBasicMaterial).opacity = (this.beaconOn ? 0.2 : 0.14) + 0.07 * Math.sin(this.animalTime * 2);
     this.updateFireflies(night, follow);
     this.updateAnimals(dt, follow, head);
     this.updatePod(dt, night);
@@ -1090,6 +1255,10 @@ export class Planet {
     this.group.add(mesh.group);
     addHubColliders(this.world, pose);
     this.hub = { pose, mesh, group: mesh.group };
+    this.hubBeam = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 70, 12, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0x2ab8ff, transparent: true, opacity: 0.2, depthWrite: false, blending: THREE.AdditiveBlending, fog: false, side: THREE.DoubleSide }));
+    this.group.add(this.hubBeam);
+    this.setBeacon(this.beaconOn);
     return this.hub;
   }
 

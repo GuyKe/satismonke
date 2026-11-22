@@ -4,7 +4,10 @@ import { CollisionWorld } from './physics/CollisionWorld';
 import { GorillaPlayer } from './player/GorillaPlayer';
 import { ArmCalibration } from './player/ArmCalibration';
 import { buildCapsule } from './world/Capsule';
-import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER, ORE_OWNER, MACHINE_OWNER } from './world/Planet';
+import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER, ORE_OWNER, MACHINE_OWNER, CRASH_OWNER, Loot } from './world/Planet';
+import { BuildSystem, Plan, Piece, PieceType, PALETTE, COST as BUILD_COST, COLOR_COST, geometry as pieceGeometry } from './world/BuildSystem';
+import { BuildPanel } from './ui/BuildPanel';
+import { Narrator, LINES, Line } from './ui/Narrator';
 import { Factory, MachineKind, ITEM_NAME } from './game/Factory';
 import { FactoryView, buildMachineMesh } from './world/FactoryView';
 import { MachinePanel, MachineAction } from './ui/MachinePanel';
@@ -48,6 +51,7 @@ async function boot() {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(innerWidth, innerHeight);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.1;
   renderer.xr.enabled = true;
   renderer.xr.setReferenceSpaceType('local-floor');
   document.body.appendChild(renderer.domElement);
@@ -94,6 +98,8 @@ async function boot() {
   rig.add(camera);
   scene.add(rig);
   const overlay = new Overlay(camera);
+  const narrator = new Narrator(camera, () => settings.volume);
+  const say = (key: keyof typeof LINES) => narrator.once(key, [...LINES[key]] as Line[]);
 
   // ---- Progress, crafting, HUDs ----
   const progress = new Progress();
@@ -125,19 +131,35 @@ async function boot() {
   };
 
   // Hub: ghost while placing, bench + computer once built
-  const MACHINE_KINDS: MachineKind[] = ['miner', 'smelter', 'constructor', 'storage', 'burner', 'solar'];
+  const MACHINE_KINDS: MachineKind[] = ['miner', 'smelter', 'constructor', 'storage', 'burner', 'solar', 'splitter', 'sink'];
   const isMachine = (k: string | null): k is MachineKind => !!k && (MACHINE_KINDS as string[]).includes(k);
   const factory = new Factory();
   // Created here (not next to machineAction) because resetGame() uses it during boot; the action is late-bound.
-  const machinePanel = new MachinePanel(factory, (a, id) => machineAction(a, id));
+  const machinePanel = new MachinePanel(factory, (a, id, arg) => machineAction(a, id, arg), () => progress.has('overclockst') && progress.items.core > 0);
   machinePanel.mesh.visible = false; scene.add(machinePanel.mesh);
   let factoryView: FactoryView | null = null;
-  let linkMode = false, linkFrom: number | null = null;
+  let linkMode = false, linkFrom: number | null = null, wasTripped = false;
   let hoveredMachine: number | null = null, selectedMachine: number | null = null, selectHold = 0;
   let placing: 'hub' | PropKind | MachineKind | null = null;
   let ghost: { group: THREE.Group } | null = null;
   let ghostPose: { x: number; z: number; y: number; yaw: number; ok: boolean; reason: string } | null = null;
-  let hubUi: { bench: RecipePanel; computer: ComputerScreen } | null = null;
+  let hubUi: { bench: RecipePanel; computer: ComputerScreen; upgrades: RecipePanel; research: RecipePanel } | null = null;
+
+  // ---- Building: foundations, walls and catwalks ----
+  let buildSystem: BuildSystem | null = null;
+  let buildActive = false;
+  let buildPlan: Plan | null = null, buildTarget: Piece | null = null;
+  const buildPanel = new BuildPanel(() => progress.colors, () => progress.items.token, i => {
+    if (progress.items.token < COLOR_COST) { sfx.fail(); return false; }
+    progress.items.token -= COLOR_COST; progress.colors.push(i); sfx.craft(); return true;
+  }, () => setBuild(false));
+  buildPanel.mesh.visible = false; scene.add(buildPanel.mesh);
+  const buildGhost = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x55ff88, transparent: true, opacity: 0.4, depthWrite: false }));
+  buildGhost.visible = false; scene.add(buildGhost);
+  const setBuild = (on: boolean) => {
+    buildActive = on && !!planet && !!buildSystem;
+    buildPanel.mesh.visible = buildActive; if (!buildActive) { buildGhost.visible = false; buildPlan = null; buildTarget = null; } else { setPanel(null); linkMode = false; }
+  };
   const lantern = new THREE.PointLight(0xffe2a0, 3, 16, 2);
 
   const headPos = () => new THREE.Vector3().copy(player.position).add(camera.position);
@@ -167,6 +189,7 @@ async function boot() {
     if ((id === 'campfire' || id === 'lamp') && progress.propsPlacedOrPending(r.id) >= MAX_PLACED) { sfx.fail(); toast(`Max ${MAX_PLACED} placed`, headPos()); return; }
     if (isMachine(id) && factory.machines.length >= MAX_MACHINES) { sfx.fail(); toast(`Max ${MAX_MACHINES} machines`, headPos()); return; }
     if (placing) { sfx.fail(); return; }
+    if (id === 'buildtool') { setBuild(!buildActive); sfx.craft(); toast(buildActive ? 'Build mode: pick a piece, aim and pull the trigger' : 'Build mode off', headPos()); return; }
     if (id === 'conveyor') { // a tool: join two machines
       linkMode = !linkMode; linkFrom = null; setPanel(null); sfx.craft();
       toast(linkMode ? 'Link mode: aim at a machine, trigger. B stops' : 'Link mode off', headPos());
@@ -176,6 +199,8 @@ async function boot() {
     if (!r.repeatable) progress.crafted.add(id);
     sfx.craft();
     if (id === 'hub' || id === 'campfire' || id === 'lamp' || isMachine(id)) startPlacing(id);
+    if (id === 'lab') say('lab');
+    if (id === 'beacon') say('beacon');
     applyGear();
   };
 
@@ -198,6 +223,9 @@ async function boot() {
       lantern.position.set(0, -0.2, -0.2); camera.add(lantern);
     } else camera.remove(lantern);
     map.showOre = progress.has('scanner');
+    factory.alt = { plate: progress.has('altplate'), wire: progress.has('altwire'), smelt: progress.has('altsmelt'), efficiency: progress.has('efficiency') };
+    factory.roofSolar = progress.has('solarroof') ? 1.2 : 0;
+    planet?.setBeacon(progress.has('beacon'));
   };
 
   const hookPlanet = (pl: Planet) => {
@@ -207,7 +235,14 @@ async function boot() {
     pl.onStone = (n, pos) => { const k = n + (progress.has('ironpick') ? 2 : progress.has('pickaxe') ? 1 : 0); progress.add('stone', k); progress.bouldersBroken++; sfx.crumble(); toast(`+${k} stone`, pos); };
     pl.onCrystal = (n, pos) => { progress.add('crystal', n); sfx.crumble(); sfx.pickup(); toast(`+${n} crystal`, pos); };
     pl.onOre = (type, n, pos) => { progress.add(type, n); progress.mined[type]++; sfx.crumble(); sfx.pickup(); toast(`+${n} ${type}`, pos); };
-    pl.onPodDestroyed = pos => { progress.podDestroyed = true; progress.podHits = POD_HITS; progress.add('steel', POD_STEEL); sfx.crumble(); toast(`+${POD_STEEL} steel`, pos); };
+    pl.onPodDestroyed = pos => { progress.podDestroyed = true; progress.podHits = POD_HITS; progress.add('steel', POD_STEEL); sfx.crumble(); toast(`+${POD_STEEL} steel`, pos); say('podSmashed'); };
+    pl.onLoot = (_i: number, loot: Loot, pos: THREE.Vector3) => {
+      const parts: string[] = [];
+      for (const [k, n] of Object.entries(loot) as [keyof Loot, number][]) { if (!n) continue; progress.items[k] += n; parts.push(`${n} ${k}`); }
+      progress.lootOpened++; sfx.crumble(); sfx.pickup(); toast(`Loot: ${parts.join(', ')}`, pos);
+      say('loot');
+      if (loot.artifact) { say('artifact'); if (progress.items.artifact >= 3) say('artifact3'); }
+    };
   };
 
   const buildHubUi = (built: { mesh: HubMesh; group: THREE.Group }) => {
@@ -216,7 +251,12 @@ async function boot() {
     bench.mesh.position.copy(built.mesh.benchScreenAt);
     computer.mesh.position.copy(built.mesh.computerScreenAt);
     built.group.add(bench.mesh, computer.mesh);
-    hubUi = { bench, computer };
+    const upgrades = new RecipePanel('HUB UPGRADES', RECIPES.filter(r => r.where === 'hub'), progress, id => craft(id), 'Upgrades change the whole Hub', 1.15, 6);
+    const research = new RecipePanel('RESEARCH', RECIPES.filter(r => r.where === 'lab'), progress, id => craft(id), 'Needs the Research Lab and data drives', 1.15, 6);
+    upgrades.mesh.position.copy(built.mesh.upgradeScreenAt); research.mesh.position.copy(built.mesh.researchScreenAt);
+    upgrades.mesh.rotation.y = Math.PI; research.mesh.rotation.y = Math.PI; // they hang on the front wall, facing in
+    built.group.add(upgrades.mesh, research.mesh);
+    hubUi = { bench, computer, upgrades, research };
   };
 
   /** Rebuild machines and belts from a save. */
@@ -241,12 +281,14 @@ async function boot() {
     hookPlanet(pl);
     factory.reset();
     factoryView = new FactoryView(); pl.group.add(factoryView.group);
+    buildSystem = new BuildSystem(pl.world); pl.group.add(buildSystem.group);
     if (d && d.planet) {
       progress.load(d.progress);
       pl.importState(d.planet);
       if (d.planet.podAlive) pl.placePod(new THREE.Vector3(...d.planet.podHead), new THREE.Vector3(...d.planet.podForward));
       if (pl.hub) buildHubUi(pl.hub);
       if (d.planet.factory) restoreFactory(pl, d.planet.factory);
+      if (d.planet.build) buildSystem.load(d.planet.build);
       applyGear();
       player.teleport(new THREE.Vector3(d.player.x, d.player.y, d.player.z));
       story.phase = 'planet';
@@ -257,6 +299,7 @@ async function boot() {
       if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
       pl.placePod(new THREE.Vector3().copy(player.position).add(camera.position), fwd.normalize());
       applyGear();
+      say('landed');
     }
     sfx.startWind();
   };
@@ -267,7 +310,7 @@ async function boot() {
       version: 2, savedAt: Date.now(), playSeconds: Math.round(playSeconds),
       phase: onPlanet ? 'planet' : 'capsule', objective: onPlanet ? progress.objective()[0] : 'In the pod',
       progress: progress.toJSON(), player: { x: player.position.x, y: player.position.y, z: player.position.z },
-      planet: onPlanet ? { ...planet!.exportState(), factory: factory.toJSON() } : null,
+      planet: onPlanet ? { ...planet!.exportState(), factory: factory.toJSON(), build: buildSystem?.toJSON() } : null,
     };
     return writeSlot(currentSlot, d);
   };
@@ -279,7 +322,7 @@ async function boot() {
     progress.reset(); placing = null;
     if (ghost) { scene.remove(ghost.group); ghost = null; }
     ghostPose = null; hubUi = null;
-    factory.reset(); factoryView = null; machinePanel.show(null); linkMode = false; linkFrom = null; selectedMachine = null; hoveredMachine = null;
+    factory.reset(); factoryView = null; buildSystem = null; setBuild(false); narrator.clearTold(); machinePanel.show(null); linkMode = false; linkFrom = null; selectedMachine = null; hoveredMachine = null;
     for (const t of toasts) scene.remove(t.sprite);
     toasts.length = 0;
     floating = null; map.mesh.visible = craftPanel.mesh.visible = false; map.showOre = false;
@@ -383,6 +426,7 @@ async function boot() {
     const t = hoverTarget[i];
     if (t && t.click(i)) { buzz(i, 0.6, 40); return; }
     if (linkMode && hoveredMachine !== null) { handleLink(hoveredMachine); return; }
+    if (buildActive) { buildPress(); return; }
     if (placing) tryPlace();
   };
   rays.forEach((r, i) => {
@@ -462,6 +506,25 @@ async function boot() {
     }
     return null;
   };
+  /** Build tool: place the planned piece, or demolish the aimed one. */
+  const buildPress = () => {
+    if (!buildSystem || !planet) return;
+    const mode = buildPanel.mode;
+    if (mode === 'demolish') {
+      if (!buildTarget) { sfx.fail(); return; }
+      const cost = BUILD_COST[buildTarget.type];
+      for (const k of Object.keys(cost) as (keyof typeof cost)[]) progress.items[k] += Math.floor((cost[k] ?? 0) / 2);
+      buildSystem.remove(buildTarget.id); buildTarget = null; sfx.crumble(); return;
+    }
+    if (!buildPlan || !buildPlan.ok) { sfx.fail(); toast(buildPlan?.reason || 'Aim at the ground', headPos()); return; }
+    const cost = BUILD_COST[mode];
+    if (!progress.canAfford(cost)) { sfx.fail(); toast(progress.describeMissing(cost), headPos()); return; }
+    const piece = buildSystem.add({ type: mode, cx: buildPlan.cx, cz: buildPlan.cz, level: buildPlan.level, edge: buildPlan.edge, axis: buildPlan.axis, color: PALETTE[buildPanel.color] });
+    if (!piece) { sfx.fail(); return; }
+    progress.spend(cost); progress.piecesBuilt++;
+    const g = pieceGeometry(piece); sfx.thump(g.center); say('build');
+  };
+
   /** Conveyor Link tool: first click picks the source, second the target. */
   const handleLink = (id: number) => {
     const a0 = linkFrom === null ? null : factory.get(linkFrom), b = factory.get(id);
@@ -480,16 +543,24 @@ async function boot() {
     sfx.craft(); toast(`Belt built (${Math.round(len)} m, ${cost} iron)`, headPos()); linkFrom = null;
   };
 
-  const machineAction = (action: MachineAction, id: number) => {
+  const machineAction = (action: MachineAction, id: number, arg?: number) => {
     const mc = factory.get(id); if (!mc || !planet) return;
     const at = new THREE.Vector3(mc.x, mc.y + 2.5, mc.z);
+    if (action === 'reset') { factory.resetBreaker(); sfx.craft(); toast('Breaker reset', at); return; }
+    if (action === 'filter') { factory.cycleFilter(id, arg ?? 0); sfx.pickup(); return; }
+    if (action === 'tokens') { const n = factory.takeTokens(); progress.items.token += n; sfx.pickup(); toast(n ? `+${n} tokens` : 'No tokens yet', at); if (n) say('sink'); return; }
+    if (action === 'overclock') {
+      if (!progress.has('overclockst') || progress.items.core < 1) { sfx.fail(); toast('Needs the Overclock Station and a core', at); return; }
+      if (factory.overclock(id)) { progress.items.core -= 1; sfx.craft(); toast(`Clock ${Math.round(mc.clock * 100)}%`, at); say('overclock'); } else sfx.fail();
+      return;
+    }
     if (action === 'fuel') {
       if (progress.items.wood < 5) { sfx.fail(); toast('Need 5 wood', at); return; }
       progress.items.wood -= 5; factory.addFuel(id, 5); progress.fueled = true; sfx.pickup(); toast('+5 wood of fuel', at);
     } else if (action === 'take') {
       const got = factory.takeAll(id), parts: string[] = [];
       const into: Record<string, 'iron' | 'copper' | 'plate' | 'wire'> = { ironOre: 'iron', copperOre: 'copper', ironIngot: 'iron', copperIngot: 'copper', plate: 'plate', wire: 'wire' };
-      for (const [k, n] of Object.entries(got) as [keyof typeof into, number][]) { if (!n) continue; progress.items[into[k]] += n; parts.push(`${n} ${ITEM_NAME[k as keyof typeof ITEM_NAME]}`); if (k === 'plate') progress.platesCollected += n; }
+      for (const [k, n] of Object.entries(got) as [keyof typeof into, number][]) { if (!n) continue; progress.items[into[k]] += n; parts.push(`${n} ${ITEM_NAME[k as keyof typeof ITEM_NAME]}`); if (k === 'plate') { progress.platesCollected += n; say('plates'); } }
       sfx.pickup(); toast(parts.length ? `Took ${parts.join(', ')}` : 'Nothing to take', at);
     } else {
       const r = progress.recipe(mc.kind);
@@ -512,13 +583,13 @@ async function boot() {
       progress.hubPlaced = true;
       buildHubUi(built);
       sfx.craft(); sfx.thump(new THREE.Vector3(gp.x, gp.y, gp.z));
-      toast('Hub built!', new THREE.Vector3(gp.x, gp.y + 3.5, gp.z));
+      toast('Hub built!', new THREE.Vector3(gp.x, gp.y + 3.5, gp.z)); say('hub');
     } else if (isMachine(kind)) {
-      let ore: { index: number; type: 'copper' | 'iron' } | null = null;
+      let ore: { index: number; type: 'copper' | 'iron'; purity: number } | null = null;
       if (kind === 'miner') {
         const o = planet.findFreeOre(gp.x, gp.z, 1.5);
         if (!o) { sfx.fail(); toast('Place the Miner on an iron or copper ore rock', headPos()); placing = kind; ghost = (() => { const mm = buildMachineMesh(kind); makeGhost(mm.group); scene.add(mm.group); return mm; })(); ghostPose = gp; return; }
-        ore = { index: o.index, type: o.type }; planet.setOreOccupied(o.index, true);
+        ore = { index: o.index, type: o.type, purity: o.purity }; planet.setOreOccupied(o.index, true); say('miner');
       }
       const mc = factory.addMachine(kind, gp.x, gp.y, gp.z, gp.yaw, ore);
       factoryView!.addMachine(mc); planet.addMachineCollider(mc.id, gp.x, gp.y, gp.z);
@@ -553,7 +624,7 @@ async function boot() {
       if (!pauseOpen) {
         if (aNow && !aPrev) setPanel(floating === 'map' ? null : 'map');        // A: map
         if (xNow && !xPrev) setPanel(floating === 'craft' ? null : 'craft');    // X: crafting
-        if (bNow && !bPrev) { if (ship.visible) story.skipToTitle(); else { cancelPlacing(); if (linkMode) { linkMode = false; linkFrom = null; toast('Link mode off', headPos()); } } } // B: skip the crash scene (capsule) / cancel placing (planet)
+        if (bNow && !bPrev) { if (ship.visible) story.skipToTitle(); else { if (buildActive) setBuild(false); cancelPlacing(); if (linkMode) { linkMode = false; linkFrom = null; toast('Link mode off', headPos()); } } } // B: skip the crash scene (capsule) / cancel placing (planet)
       }
     }
     aPrev = aNow; bPrev = bNow; xPrev = xNow; yPrev = yNow;
@@ -599,7 +670,11 @@ async function boot() {
         if (!h.started || !gripDown[i]) return;
         const id = player.world.ownerAt(h.contact);
         if (id < 0) return;
-        if (id >= MACHINE_OWNER) return; // machines are not something to punch
+        if (id >= CRASH_OWNER) { // a crashed pod: three punches to open it
+          if (h.impact < 2.0) return;
+          const left = planet!.hitSite(id - CRASH_OWNER); if (left) sfx.clink(); buzz(i, 1, 90); return;
+        }
+        if (id >= MACHINE_OWNER) return; // machines and building pieces are not something to punch
         const isTree = id < POD_OWNER;
         const need = isTree ? (progress.has('axe') ? 1.2 : 2.2) : 2.0;
         if (h.impact < need) return;
@@ -632,8 +707,9 @@ async function boot() {
     else {
       if (floating === 'map') targets.push(map);
       if (floating === 'craft') targets.push(craftPanel);
+      if (buildActive) targets.push(buildPanel);
       if (machinePanel.mesh.visible) targets.push(machinePanel);
-      if (hubUi && planet?.hub && Math.hypot(planet.hub.pose.x - headW.x, planet.hub.pose.z - headW.z) < 14) targets.push(hubUi.bench, hubUi.computer);
+      if (hubUi && planet?.hub && Math.hypot(planet.hub.pose.x - headW.x, planet.hub.pose.z - headW.z) < 14) targets.push(hubUi.bench, hubUi.computer, hubUi.upgrades, hubUi.research);
     }
     const meshes = targets.map(t => t.mesh);
     const setHover = (pointer: number, hit: { index: number; uv: THREE.Vector2 } | null) => {
@@ -672,8 +748,11 @@ async function boot() {
         machinePanel.mesh.lookAt(headW);
       }
       machinePanel.update(dt);
+      factoryView.focus.copy(headW);
       factory.update(simDt, planet.daylight);
       factoryView.update(simDt, factory);
+      if (factory.tripped && !wasTripped) { say('trip'); sfx.fail(); }
+      wasTripped = factory.tripped;
     } else if (machinePanel.mesh.visible) machinePanel.show(null);
 
     if (ship.visible) {
@@ -709,7 +788,38 @@ async function boot() {
       panel.lookAt(headW);
       if (floating === 'map') map.update(dt, planet, headW.x, headW.z, fwd.x, fwd.z); else craftPanel.update();
     }
-    if (hubUi) { hubUi.bench.update(); hubUi.computer.update(dt); }
+    if (hubUi) { hubUi.bench.update(); hubUi.computer.update(dt); hubUi.upgrades.update(); hubUi.research.update(); }
+
+    // Build mode: aim at the ground or at a piece, see what would be placed
+    if (buildActive && buildSystem && planet) {
+      let o: THREE.Vector3, d: THREE.Vector3;
+      if (inXR) {
+        const idx = inputs[1]?.handedness === 'right' ? 1 : inputs[0]?.handedness === 'right' ? 0 : 1;
+        o = new THREE.Vector3().setFromMatrixPosition(rays[idx].matrixWorld);
+        d = new THREE.Vector3(0, 0, -1).transformDirection(rays[idx].matrixWorld);
+      } else { o = headW.clone(); d = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); }
+      const ray = new THREE.Raycaster(o, d, 0, 40);
+      const hp = buildSystem.pick(ray), tp = aimAtTerrain(o, d);
+      const tpoint = tp ? new THREE.Vector3(tp.x, heightAt(tp.x, tp.z), tp.z) : null;
+      const usePiece = !!hp && (!tpoint || hp.distance <= o.distanceTo(tpoint));
+      buildTarget = usePiece ? hp!.piece : null;
+      const point = usePiece ? hp!.point : tpoint;
+      const mat = buildGhost.material as THREE.MeshBasicMaterial;
+      if (!point) { buildGhost.visible = false; buildPlan = null; }
+      else if (buildPanel.mode === 'demolish') {
+        buildPlan = null; buildGhost.visible = !!buildTarget;
+        if (buildTarget) { const g = pieceGeometry(buildTarget); buildGhost.position.copy(g.center); buildGhost.scale.copy(g.size).addScalar(0.05); mat.color.set(0xff5555); }
+      } else {
+        buildPlan = buildSystem.plan(buildPanel.mode, point, buildTarget, fwd);
+        const g = pieceGeometry(buildPlan);
+        buildGhost.visible = true; buildGhost.position.copy(g.center); buildGhost.scale.copy(g.size).addScalar(0.05);
+        mat.color.set(buildPlan.ok && progress.canAfford(BUILD_COST[buildPanel.mode]) ? 0x55ff88 : 0xff5555);
+      }
+      // the palette hangs to your left
+      const left = headW.clone().addScaledVector(fwd, 0.95).addScaledVector(new THREE.Vector3(-fwd.z, 0, fwd.x), -0.7); left.y = headW.y - 0.2;
+      buildPanel.mesh.position.lerp(left, 1 - Math.exp(-8 * dt)); buildPanel.mesh.lookAt(headW); buildPanel.mesh.scale.setScalar(0.8);
+      buildPanel.update();
+    }
 
     // Placement ghost follows your aim
     if (placing && ghost && planet) {
@@ -740,6 +850,8 @@ async function boot() {
       } else ghostPose = null;
     }
 
+    narrator.update(dt);
+
     // Wrist displays and the desktop text overlay
     const obj = progress.objective();
     resourceHud.set(progress); objectiveHud.set(obj);
@@ -761,7 +873,7 @@ async function boot() {
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    narrator, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
     get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },

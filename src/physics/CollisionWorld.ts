@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-export interface BoxCollider { center: THREE.Vector3; half: THREE.Vector3; slip: number; cos: number; sin: number; }
+export interface BoxCollider { center: THREE.Vector3; half: THREE.Vector3; slip: number; cos: number; sin: number; owner: number; }
 export interface SphereCollider { center: THREE.Vector3; radius: number; slip: number; owner: number; }
 /** Vertical capsule: a trunk from y0 to y1 with radius r. */
 /** Flat-topped cylinder: mesas and rock spires. */
@@ -36,8 +36,8 @@ export class CollisionWorld {
   private ownerOut = -1;
 
   /** `yaw` rotates the box about the vertical axis (same convention as Object3D.rotation.y). */
-  addBox(center: THREE.Vector3, size: THREE.Vector3, slip = 0.3, yaw = 0): BoxCollider {
-    const b = { center: center.clone(), half: size.clone().multiplyScalar(0.5), slip, cos: Math.cos(yaw), sin: Math.sin(yaw) };
+  addBox(center: THREE.Vector3, size: THREE.Vector3, slip = 0.3, yaw = 0, owner = -1): BoxCollider {
+    const b = { center: center.clone(), half: size.clone().multiplyScalar(0.5), slip, cos: Math.cos(yaw), sin: Math.sin(yaw), owner };
     this.boxes.push(b);
     return b;
   }
@@ -54,14 +54,14 @@ export class CollisionWorld {
 
   /** Remove the colliders of many owners at once (one spatial-hash rebuild). */
   removeOwners(owners: Set<number>): void {
-    for (const arr of [this.spheres, this.cylinders] as { owner: number }[][])
+    for (const arr of [this.spheres, this.cylinders, this.boxes] as { owner: number }[][])
       for (let i = arr.length - 1; i >= 0; i--) if (owners.has(arr[i].owner)) arr.splice(i, 1);
     if (this.grid) this.finalize();
   }
 
   /** Remove every collider belonging to `owner` (a felled tree stops being solid). */
   removeOwner(owner: number): void {
-    for (const arr of [this.spheres, this.cylinders] as { owner: number }[][])
+    for (const arr of [this.spheres, this.cylinders, this.boxes] as { owner: number }[][])
       for (let i = arr.length - 1; i >= 0; i--) if (arr[i].owner === owner) arr.splice(i, 1);
     if (this.grid) this.finalize();
   }
@@ -114,7 +114,7 @@ export class CollisionWorld {
       const qy = Math.abs(p.y - b.center.y) - b.half.y;
       const qz = Math.abs(dx * b.sin + dz * b.cos) - b.half.z;
       const bd = Math.hypot(Math.max(qx, 0), Math.max(qy, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qy, qz), 0);
-      if (bd < d) { d = bd; slip = b.slip; owner = -1; }
+      if (bd < d) { d = bd; slip = b.slip; owner = b.owner; }
     }
     let spheres = this.spheres, cylinders = this.cylinders, pillars = this.pillars;
     if (this.grid) {

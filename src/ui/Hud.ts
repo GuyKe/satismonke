@@ -4,19 +4,20 @@ import type { Progress } from '../game/Progress';
 /** Left wrist: how much of each resource you carry (two columns). */
 export class ResourceHud extends Screen {
   private key = '';
-  constructor() { super(0.2, 0.125, 512, 320); }
+  constructor() { super(0.2, 0.15, 512, 384); }
 
   set(p: Progress): void {
-    const it = p.items, k = `${it.wood}/${it.stone}/${it.steel}/${it.crystal}/${it.copper}/${it.iron}/${it.gold}/${it.plasma}/${it.plate}/${it.wire}`;
+    const it = p.items, k = `${it.wood}/${it.stone}/${it.steel}/${it.crystal}/${it.copper}/${it.iron}/${it.gold}/${it.plasma}/${it.plate}/${it.wire}/${it.token}/${it.core}/${it.drive}/${it.artifact}`;
     if (k === this.key) return;
     this.key = k;
     const { ctx } = this;
-    ctx.fillStyle = '#12100c'; ctx.fillRect(0, 0, 512, 320);
-    ctx.strokeStyle = '#c98a4a'; ctx.lineWidth = 6; ctx.strokeRect(3, 3, 506, 314);
+    ctx.fillStyle = '#12100c'; ctx.fillRect(0, 0, 512, 384);
+    ctx.strokeStyle = '#c98a4a'; ctx.lineWidth = 6; ctx.strokeRect(3, 3, 506, 378);
     const cells: [string, number, string][] = [
       ['WOOD', it.wood, '#e8b27a'], ['COPPER', it.copper, '#e08a3c'], ['STONE', it.stone, '#c0c4d0'], ['IRON', it.iron, '#8fa6c8'],
       ['STEEL', it.steel, '#8fc3ff'], ['GOLD', it.gold, '#ffd23a'], ['CRYSTAL', it.crystal, '#6fe8ff'], ['PLASMA', it.plasma, '#d27aff'],
       ['PLATE', it.plate, '#e0e6f0'], ['WIRE', it.wire, '#ff9040'],
+      ['TOKEN', it.token, '#ffd45a'], ['CORE', it.core, '#ff7aa0'], ['DRIVE', it.drive, '#7affb0'], ['ARTIFACT', it.artifact, '#c04dff'],
     ];
     ctx.font = 'bold 26px monospace';
     cells.forEach(([n, v, c], i) => {
@@ -32,7 +33,7 @@ export class ResourceHud extends Screen {
 /** Right wrist: what to do next, in two short lines. */
 export class ObjectiveHud extends Screen {
   private key = '';
-  constructor() { super(0.2, 0.125, 512, 320); }
+  constructor() { super(0.2, 0.15, 512, 384); }
 
   set(lines: [string, string]): void {
     const k = lines.join('|');

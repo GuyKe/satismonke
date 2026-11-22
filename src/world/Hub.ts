@@ -68,6 +68,8 @@ export interface HubMesh {
   /** Mount points for the interactive screens (local space). */
   benchScreenAt: THREE.Vector3;
   computerScreenAt: THREE.Vector3;
+  upgradeScreenAt: THREE.Vector3;
+  researchScreenAt: THREE.Vector3;
 }
 
 /** Build the steel Hub: low house, roof, two long walls, open stair ends, bench and computer desk. */
@@ -114,5 +116,5 @@ export function buildHubMesh(ghost = false): HubMesh {
     group.traverse(o => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).material = gm; });
     group.userData.ghostMaterial = gm;
   }
-  return { group, benchScreenAt: new THREE.Vector3(-1.9, FLOOR + 1.62, -2.43), computerScreenAt: new THREE.Vector3(2.0, FLOOR + 1.1, -2.15) };
+  return { group, benchScreenAt: new THREE.Vector3(-1.9, FLOOR + 1.62, -2.43), computerScreenAt: new THREE.Vector3(2.0, FLOOR + 1.1, -2.15), upgradeScreenAt: new THREE.Vector3(-1.9, FLOOR + 1.5, 2.43), researchScreenAt: new THREE.Vector3(1.9, FLOOR + 1.5, 2.43) };
 }

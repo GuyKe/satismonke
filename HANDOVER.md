@@ -36,6 +36,28 @@ Quest Touch mapping (UNTESTED on hardware): right controller A = `gamepad.button
 - Chop: hold grip and punch a tree at >= 2.2 m/s (`hand.impact` from `GorillaPlayer`). `CollisionWorld` colliders carry an `owner` id (the tree index); `ownerAt(contact)` identifies it and `removeOwner` makes it non-solid. `Planet.fellTree` swaps the instanced tree for a temporary mesh that tips away from you over 1 s, lies there, and after 3 s total disappears and calls `onWood` (2-5 wood by height, +1 for pines). Wood count is shown on the left wrist (`ui/WoodHud.ts`) plus a floating "+N wood" toast; there is no use for wood yet (crafting is a natural next step). Sounds: chop, thump, pickup in `Sfx`.
 - Creatures look away: each creature alternates 4-10 s watching you with 3-8 s looking elsewhere (`look.away`). Curious, defensive and friendly ones also lose interest while looking away and go back to wandering; shy and skittish ones still keep their distance.
 
+## Phase 2: building, crashed pods, hub upgrades, advanced automation, sky
+Status against the second brief (names are original: tokens, cores, data drives, Resource Sink, Research Lab, VESPER; the source game's names are not used):
+| Item | Status |
+|---|---|
+| Foundations, walls, catwalks | Done: Build Tool (X menu after the Hub). 4 m grid, floors every 3 m, walls on cell edges (stack upward), catwalks. Cosmetic colours bought with tokens |
+| Other crashed pods with loot | Done: ~13-16 sites, 3 punches to open; loot rolls steel/plate/wire/crystal plus rare core, data drive, alien artifact |
+| Hub upgrades | Done: Signal Beacon, Solar Roof, Research Lab, Overclock Station (upgrade + research screens on the Hub's front wall) |
+| Hub signal on the map | Done: pulsing ring, or an edge arrow with distance when off-map; plus a light beam in the world (taller with the Beacon upgrade); found crashed pods show as red triangles |
+| Sky and land | Done: shader sky dome (gradient, sunsets/sunrises with pink and orange bands, clouds, aurora at night), warm dusk light and ambient glow, tinted water, ACES tone mapping |
+| Smart splitters (left/centre/right filters, overflow) | Done: Smart Splitter machine; click a slot on its panel to cycle ANY / item / OVERFLOW; overflow only gets what nothing else will take |
+| Manifolds | Works naturally (machines have input buffers) |
+| Resource Sink + coupons | Done: shreds anything for tokens (plate 5, wire 3, ingot 2, ore 1); tokens buy building colours |
+| Infinite nodes with purity | Done: nodes never deplete; impure x0.5 / normal x1 / pure x2 (shown on the miner panel) |
+| Byproduct loops | Not started |
+| Breaker trip + priority switches | Breaker done (trips when demand > 125% of supply; RESET BREAKER on any machine panel). Priority switches not started |
+| Overclocking | Done: cores from pods, +50% per core up to 250%, power draw scales as clock^1.6 |
+| Simulation optimisation | Partly: belt items are positions along a path (no physics), far machines skip animation. No further LOD yet |
+| Artifacts and narrative | Done: VESPER subtitles (and speech where the browser has it) plus eerie alien lines when artifacts are found (`ui/Narrator.ts`, `LINES`) |
+| Research (alt recipes from data drives) | Done: Coated Plates, Braided Wire, Fast Smelting, Efficient Motors. No organic-sample tree yet |
+| Environmental hazards (masks, suits, speed boots) | Not started |
+Systems: `world/BuildSystem.ts` (+ `ui/BuildPanel.ts`), crash sites in `Planet.buildCrashSites` (`CRASH_OWNER`), purity in `Planet.buildOres`, new machines `splitter` and `sink` and the breaker/overclock logic in `game/Factory.ts` (tests: sections 13 and 14 of `tests/physics.sanity.ts`), sky shader `SKY_FRAG` in `Planet.ts`. Resources added: token, core, drive, artifact. Saves now also hold buildings, looted/discovered pods and splitter settings (still version 2; the new fields are optional).
+
 ## Factory automation (phase 1 of the factory-game vision)
 Pillars of the design brief and where each stands:
 | Pillar | Status |
@@ -43,7 +65,7 @@ Pillars of the design brief and where each stands:
 | Hand mining -> automation | Done (phase 1): mine by hand, then Miners, Smelters, Constructors |
 | Belts, splitters, mergers, bottlenecks | Done in simplified form: point-to-point belts; several outgoing belts split, several incoming merge; 60 items/min per belt; wrong item types jam a line |
 | Power grid | Partly: Biomass Burner (hand-fed wood) and Solar Panel (daylight only), one global grid that slows every machine when demand exceeds supply. No wires/poles, coal, fuel, nuclear yet |
-| 3D building (foundations, walls, catwalks, glass roofs) | Not started (only the prefab Hub) |
+| 3D building (foundations, walls, catwalks, glass roofs) | Foundations, walls, catwalks done (see Phase 2); glass roofs and ramps not yet |
 | Fluids (water, oil, gas, pipes, pressure) | Not started |
 | Long-distance transport (trucks, trains, drones, depots) | Not started (belts already run any distance over terrain) |
 | Hand-made world, hidden caves, cliffs, distinct biomes | Not started (terrain is procedural: plains, lakes, rivers, ridges, buttes) |

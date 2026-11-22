@@ -123,6 +123,7 @@ export class MapMenu extends Screen {
     const hub = planet.hub;
     if (hub) { ctx.save(); ctx.translate(X(hub.pose.x), Y(hub.pose.z)); ctx.rotate(-hub.pose.yaw); ctx.fillStyle = '#b8c4d8'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; const w = Math.max(8, 12.4 * k), d = Math.max(5, 5.4 * k); ctx.fillRect(-w / 2, -d / 2, w, d); ctx.strokeRect(-w / 2, -d / 2, w, d); ctx.restore(); }
     for (const pr of planet.props) { ctx.fillStyle = pr.kind === 'campfire' ? '#ff8a30' : '#6ff0ff'; ctx.beginPath(); ctx.arc(X(pr.x), Y(pr.z), 5, 0, 7); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    for (const st of planet.siteMarks) { const sx = X(st.x), sy = Y(st.z); ctx.fillStyle = '#ff4a4a'; ctx.beginPath(); ctx.moveTo(sx, sy - 7); ctx.lineTo(sx + 6, sy + 5); ctx.lineTo(sx - 6, sy + 5); ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
     const pod = planet.podPosition;
     if (pod) { ctx.fillStyle = '#ff8a30'; ctx.fillRect(X(pod.x) - 6, Y(pod.z) - 6, 12, 12); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(X(pod.x) - 6, Y(pod.z) - 6, 12, 12); }
 
@@ -132,6 +133,22 @@ export class MapMenu extends Screen {
     ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-9, 9); ctx.lineTo(-4, 0); ctx.lineTo(-9, -9); ctx.closePath(); ctx.stroke(); ctx.fill();
     ctx.restore();
+
+    // Hub signal: a pulsing ring on the map, and an arrow on the edge when it is out of view (so you can always find home)
+    if (planet.hub) {
+      const hx = planet.hub.pose.x, hz = planet.hub.pose.z, dx = hx - px, dz = hz - pz, dist = Math.hypot(dx, dz);
+      const sx = MAP.x + MAP.s / 2 + dx * k, sy = MAP.y + MAP.s / 2 + dz * k, inside = Math.abs(sx - (MAP.x + MAP.s / 2)) < MAP.s / 2 - 8 && Math.abs(sy - (MAP.y + MAP.s / 2)) < MAP.s / 2 - 8;
+      const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 300);
+      ctx.save(); ctx.lineWidth = 4; ctx.strokeStyle = `rgba(111,232,255,${0.9 - 0.6 * pulse})`;
+      if (inside) { ctx.beginPath(); ctx.arc(sx, sy, 12 + pulse * 16, 0, 7); ctx.stroke(); }
+      else {
+        const cx = MAP.x + MAP.s / 2, cy = MAP.y + MAP.s / 2, e = MAP.s / 2 - 26, s = e / Math.max(Math.abs(dx), Math.abs(dz), 1e-3);
+        ctx.translate(cx + dx * s, cy + dz * s); ctx.rotate(Math.atan2(dz, dx));
+        ctx.fillStyle = '#6fe8ff'; ctx.beginPath(); ctx.moveTo(18, 0); ctx.lineTo(-12, 13); ctx.lineTo(-6, 0); ctx.lineTo(-12, -13); ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#06323a'; ctx.stroke();
+        ctx.rotate(-Math.atan2(dz, dx)); ctx.fillStyle = '#6fe8ff'; ctx.font = 'bold 18px monospace'; ctx.textAlign = 'center'; ctx.fillText(`HUB ${Math.round(dist)} m`, 0, dx * s > 0 ? -22 : 34);
+      }
+      ctx.restore();
+    }
 
     // north marker + frame
     ctx.fillStyle = '#fff'; ctx.font = 'bold 26px monospace'; ctx.textAlign = 'center';
@@ -144,6 +161,7 @@ export class MapMenu extends Screen {
     ctx.fillStyle = '#6ff0ff'; ctx.fillText('◆ crystals', MAP.x + 80, MAP.y + MAP.s - 10);
     ctx.fillStyle = '#46d9b0'; ctx.fillText('■ trees', MAP.x + 205, MAP.y + MAP.s - 10);
     ctx.fillStyle = '#fff'; ctx.fillText('■ creatures', MAP.x + 300, MAP.y + MAP.s - 10);
+    ctx.fillStyle = '#ff4a4a'; ctx.fillText('▲ crashed pods', MAP.x + 440, MAP.y + MAP.s - 10);
     if (this.showOre) { ctx.fillStyle = '#ffd23a'; ctx.fillText('● ore', MAP.x + 420, MAP.y + MAP.s - 10); }
 
     const hov = new Set(this.hovered.values());
