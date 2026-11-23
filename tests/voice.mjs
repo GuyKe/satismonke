@@ -13,7 +13,7 @@ await A.waitForFunction(() => window.__game.voice.connected === 1, null, { timeo
 await B.waitForFunction(() => window.__game.voice.connected === 1, null, { timeout: 30000 });
 const peak = async p => { let m = 0; for (let i = 0; i < 30; i++) { m = Math.max(m, await p.evaluate(() => { const g = window.__game, o = g.net.list.find(x => x.id !== g.net.me.id).id; return g.voice.levelOf(o); })); await p.waitForTimeout(200); } return +m.toFixed(3); };
 console.log('peak level B hears from A:', await peak(B), ' A hears from B:', await peak(A));
-const info = p => p.evaluate(() => { const g = window.__game, other = g.net.list.find(x => x.id !== g.net.me.id).id; return { state: g.voice.state, connected: g.voice.connected, heardLevel: +g.voice.levelOf(other).toFixed(3), speaking: g.voice.speaking(other) }; });
+const info = p => p.evaluate(() => { const g = window.__game, other = g.net.list.find(x => x.id !== g.net.me.id).id; return { state: g.voice.state, connected: g.voice.connected, heardLevel: +g.voice.levelOf(other).toFixed(3), speaking: g.voice.speaking(other), loudness: +g.voice.loudness(other).toFixed(2) }; });
 console.log('A', await info(A), 'B', await info(B));
 await A.evaluate(() => window.__game.voice.toggleMute()); console.log('A after mute:', await A.evaluate(() => window.__game.voice.state));
 await B.waitForTimeout(2000); console.log('peak while A muted:', await peak(B));

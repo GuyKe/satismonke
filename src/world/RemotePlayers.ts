@@ -25,6 +25,7 @@ class Avatar {
     this.model.visible = false;
   }
 
+  setMouth(loud: number): void { this.model.setMouth(loud); }
   setSpeaking(on: boolean): void { (this.tag.material as THREE.SpriteMaterial).color.set(on ? 0x7fffa0 : 0xffffff); this.tag.scale.setScalar(1); this.tag.scale.set(on ? 0.7 : 0.6, on ? 0.175 : 0.15, 1); }
 
   step(k: number, dt: number): void {
@@ -65,6 +66,8 @@ export class RemotePlayers {
   }
   /** A friend's head position (for voice). */
   headOf(id: string): THREE.Vector3 | null { const a = this.avatars.get(id); return a && a.seen ? a.head : null; }
+  /** Open a friend's mouth to match how loud they are (0..1). */
+  setMouth(id: string, loud: number): void { this.avatars.get(id)?.setMouth(loud); }
   /** Light up a friend's name tag while they talk. */
   setSpeaking(id: string, on: boolean): void { const a = this.avatars.get(id); if (a) a.setSpeaking(on); }
   get count(): number { return this.avatars.size; }

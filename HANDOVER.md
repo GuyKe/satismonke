@@ -191,3 +191,6 @@ In a lobby the **host owns the factory and the buildings**. Clients validate and
 
 ## Avatar detail pass
 `PlayerModel` now also has: eyebrows, cheeks, smile, hair and cheek tufts, blinking eyelids with sparkles, helmet lamps, pod lights and a glass glint; chest emblem, collar, shoulder pads with accent patches and beacons, belt buckle, pouches and a wrench, hoses from the pack, vents, light strip and dish on the pack; a 7-segment monkey tail that sways and swings as you turn; shoulder joints, elbow rings and accent bands on the arms; gloves with knuckle plates, fingertip pads and pulsing wrist lights; and a gentle breathing motion.
+
+## Lip sync
+`Voice.loudness(id)` (0..1, from the incoming audio level) drives `PlayerModel.setMouth`: the smile turns into an open mouth with a tongue that grows taller the louder the friend talks (opens fast, closes a little slower). Wired in `src/main.ts` next to the speaking indicator.

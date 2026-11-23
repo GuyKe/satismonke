@@ -20,6 +20,8 @@ export class PlayerModel {
   private glow: THREE.Mesh;
   private bulb: THREE.Mesh;
   private lids: THREE.Mesh[] = [];
+  private smile!: THREE.Mesh; private maw!: THREE.Mesh; private tongue!: THREE.Mesh;
+  private mouthOpen = 0; private mouthGoal = 0;
   private tail: THREE.Group[] = [];
   private torsoMesh: THREE.Mesh;
   private elbows: THREE.Mesh[] = []; private bands: THREE.Mesh[] = []; private wristLights: THREE.Mesh[] = [];
@@ -62,7 +64,10 @@ export class PlayerModel {
       h.add(sph(0.007, white, sd * 0.045, 0.034, -0.14));                                                                                                                       // eye sparkle
       h.add(sph(0.034, pale, sd * 0.085, -0.045, -0.075, 1, 0.8, 0.8));                                                                                                        // cheeks
     }
-    const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.004, 6, 14, Math.PI), black); mouth.position.set(0, -0.075, -0.135); mouth.rotation.z = Math.PI; h.add(mouth);   // smile
+    const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.004, 6, 14, Math.PI), black); mouth.position.set(0, -0.075, -0.135); mouth.rotation.z = Math.PI; h.add(mouth); this.smile = mouth;   // smile (closed mouth)
+    // open mouth: a dark oval that grows taller the louder you talk, with a tongue inside
+    this.maw = sph(0.03, new THREE.MeshStandardMaterial({ color: 0x1a0508, roughness: 0.6 }), 0, -0.082, -0.134, 1.15, 0.4, 0.45); this.maw.visible = false; h.add(this.maw);
+    this.tongue = sph(0.02, new THREE.MeshStandardMaterial({ color: 0xe0707e, roughness: 0.7 }), 0, -0.098, -0.138, 1, 0.2, 0.4); this.tongue.visible = false; h.add(this.tongue);
     for (let i = 0; i < 3; i++) { const tuft = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.07, 6), fur); tuft.position.set((i - 1) * 0.035, 0.125, -0.02); tuft.rotation.z = (1 - i) * 0.35; tuft.rotation.x = -0.25; h.add(tuft); }   // hair tuft
     for (const sd of [-1, 1]) { const tuft = new THREE.Mesh(new THREE.ConeGeometry(0.016, 0.05, 6), pale); tuft.position.set(sd * 0.11, -0.07, -0.02); tuft.rotation.z = sd * 2.2; h.add(tuft); }                              // cheek fluff
     // helmet: glass bubble, neck ring, comms pods and a glowing antenna
@@ -152,6 +157,9 @@ export class PlayerModel {
     this.group.add(h, b);
   }
 
+  /** How loud this player is talking right now, 0 (silent) to 1 (shouting): the mouth opens to match. */
+  setMouth(loud: number): void { this.mouthGoal = THREE.MathUtils.clamp(loud, 0, 1); }
+
   /** Put the model where the player is. `head` is eye position, `yaw` the head's heading; hands are world positions. */
   setPose(head: THREE.Vector3, yaw: number, pitch: number, roll: number, left: THREE.Vector3, right: THREE.Vector3, dt: number): void {
     this.t += dt;
@@ -160,6 +168,11 @@ export class PlayerModel {
     this.bodyG.position.copy(head); this.bodyG.rotation.set(0, yaw, 0);
     (this.glow.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2 + Math.sin(this.t * 9) * 0.5;
     (this.bulb.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.9 + Math.sin(this.t * 3) * 0.5;
+    // lip sync: the mouth chases the loudness (opens fast, closes a little slower)
+    this.mouthOpen += (this.mouthGoal - this.mouthOpen) * Math.min(1, dt * (this.mouthGoal > this.mouthOpen ? 28 : 14));
+    const o = this.mouthOpen, talking = o > 0.04;
+    this.smile.visible = !talking; this.maw.visible = this.tongue.visible = talking;
+    if (talking) { this.maw.scale.set(1.15 * (1 + o * 0.3), 0.4 + o * 1.9, 0.45); this.maw.position.y = -0.078 - o * 0.02; this.tongue.scale.set(1, 0.2 + o * 0.8, 0.4); this.tongue.position.y = -0.09 - o * 0.034; }
     // blink every few seconds, breathe, and sway the tail with how fast you turn
     this.blinkT -= dt; const blink = this.blinkT < 0.12 ? 1 : 0.02; if (this.blinkT < 0) this.blinkT = 2.5 + Math.random() * 3.5;
     for (const lid of this.lids) lid.scale.y = blink * 0.95 + 0.02;
