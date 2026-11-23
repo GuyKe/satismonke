@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_DIR + 'playwright');
 const b = await chromium.launch({ args: ['--use-gl=swiftshader', '--no-sandbox', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
 const URL = 'http://localhost:4173/?peerhost=127.0.0.1&peerport=9000&fastload=1';
-const mk = async () => { const c = await b.newContext({ permissions: ['microphone'] }); const p = await c.newPage(); p.errs = []; p.on('pageerror', e => p.errs.push(String(e))); await p.goto(URL); await p.waitForFunction(() => window.__game, null, { timeout: 60000 }); return p; };
+const mk = async () => { const c = await b.newContext({ permissions: ['microphone'] }); const p = await c.newPage(); p.errs = []; p.on('pageerror', e => p.errs.push(String(e.stack ?? e).split('\n').slice(0, 4).join(' | '))); await p.goto(URL); await p.waitForFunction(() => window.__game, null, { timeout: 60000 }); return p; };
 const G = (p, f, ...a) => p.evaluate(f, ...a);
 const A = await mk(), B = await mk(), C = await mk();
 const out = {};

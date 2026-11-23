@@ -25,7 +25,7 @@ type Msg =
   | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[]; world: WorldEvent[] }
   | { t: 'join'; p: PlayerInfo }
   | { t: 'leave'; id: string }
-  | { t: 'start'; clock: number }
+  | { t: 'start'; clock: number; world?: WorldEvent[] }
   | { t: 'clock'; clock: number }
   | { t: 'w'; k: string; i: number; d?: number[] }
   | { t: 'op'; rid: number; op: Op }
@@ -183,7 +183,7 @@ export class Net {
   start(): void {
     if (!this.isHost || this.state !== 'lobby') return;
     this.state = 'game';
-    this.broadcast({ t: 'start', clock: this.getClock() });
+    this.broadcast({ t: 'start', clock: this.getClock(), world: this.worldLog });
     this.onStart(this.getClock()); this.onChange();
   }
 
@@ -231,7 +231,7 @@ export class Net {
         break;
       case 'join': this.players.set(m.p.id, m.p); this.onChange(); break;
       case 'leave': this.players.delete(m.id); this.onLeave(m.id); this.onChange(); break;
-      case 'start': this.state = 'game'; this.onStart(m.clock); this.onChange(); break;
+      case 'start': for (const [k, i, d] of m.world ?? []) this.logWorld(k, i, d); this.state = 'game'; this.onStart(m.clock); this.onChange(); break;
       case 'clock': this.onClock(m.clock); break;
       case 'reject': this.fail(m.msg); break;
       case 'restore': this.restoreData = { progress: m.d, pos: m.pos }; break;
