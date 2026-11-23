@@ -29,5 +29,17 @@ ok('desert has real dunes', R('desert') > R('plains') * 1.3);
 ok('jungle has canyons (deeper lows than the plains)', stats.jungle.min < stats.plains.min || stats.jungle.steep > stats.plains.steep);
 ok('desert has more water than the plains', stats.desert.land < stats.plains.land);
 ok('every map is mostly dry land', MAP_IDS.every(id => stats[id].land > 0.6));
+// the open fields (plains): flat, dry inside, water to the north and east, a void in the south
+{
+  setMap('plains');
+  let n = 0, wet = 0, flat = 0, maxSlope = 0;
+  for (let x = -250; x <= 250; x += 10) for (let z = -250; z <= 250; z += 10) { if (Math.hypot(x, z) > 250) continue; n++; const h = heightAt(x, z); if (h < WATER_Y + 1) wet++; const g = Math.max(Math.abs(heightAt(x + 4, z) - h), Math.abs(heightAt(x, z + 4) - h)) / 4; maxSlope = Math.max(maxSlope, g); if (g < 0.18) flat++; }
+  ok('plains: almost no water inside the main fields', wet / n < 0.02, `(${(100 * wet / n).toFixed(1)}% wet within 250 m)`);
+  ok('plains: the main fields are gentle everywhere (no cliffs)', maxSlope < 0.6 && flat / n > 0.9, `(${(100 * flat / n).toFixed(0)}% of ground under 10 degrees, steepest ${maxSlope.toFixed(2)})`);
+  let north = 0, east = 0; for (let a = 0; a < 60; a++) { for (const [cx, cz, c] of [[0, -560, 'n'], [430, -30, 'e']] as const) { const x = cx + (a % 6 - 2.5) * 30, z = cz + (Math.floor(a / 6) - 4.5) * 30; if (heightAt(x, z) < WATER_Y - 1) { if (c === 'n') north++; else east++; } } }
+  ok('plains: crater lakes to the north and east', north > 10 && east > 10, `(north ${north}, east ${east} deep samples)`);
+  ok('plains: the south edge is a void', heightAt(0, 320) > -3 && heightAt(0, 380) < -250 && heightAt(120, 420) < -380, `(z 320 ${heightAt(0, 320).toFixed(1)}, z 380 ${heightAt(0, 380).toFixed(0)}, z 420 ${heightAt(120, 420).toFixed(0)})`);
+  setMap('jungle'); ok('other maps have no void', heightAt(0, 420) > -60);
+}
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);

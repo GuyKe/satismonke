@@ -73,6 +73,7 @@ export function heightAt(x: number, z: number): number {
   const outer = smooth(200, 560, r);
   if (outer > 0) h += outer * M.ridge * ridge(x, z);
   if (M.canyons > 0) h -= canyon(x, z);
+  if (M.voidZ !== undefined) h -= 420 * smooth(M.voidZ, M.voidZ + 30, z);   // the cliff and the endless drop behind it
   for (const l of LAKES) {
     const d = Math.hypot(x - l.x, z - l.z);
     if (d < l.r) h -= l.depth * (1 - smooth(l.r * 0.55, l.r, d));
@@ -127,11 +128,12 @@ export function buildTerrainMesh(map: THREE.Texture, quality: 'low' | 'medium' |
   const RINGS = nearRings + farRings;
   const pos: number[] = [0, heightAt(0, 0), 0], uv: number[] = [0, 0], col: number[] = [];
   const idx: number[] = [];
-  const pink = new THREE.Color(M.groundA), violet = new THREE.Color(M.groundB), sand = new THREE.Color(M.sand), c = new THREE.Color(), dirt = M.dirt;
+  const VOID = new THREE.Color(0x07040f), pink = new THREE.Color(M.groundA), violet = new THREE.Color(M.groundB), sand = new THREE.Color(M.sand), c = new THREE.Color(), dirt = M.dirt;
   const tint = (x: number, y: number, z: number) => {
     const n = 0.5 + 0.5 * Math.sin(x * 0.011 + Math.sin(z * 0.013) * 2) * Math.sin(z * 0.009 + 1);
     c.copy(pink).lerp(violet, n * 0.8 + THREE.MathUtils.clamp(y / 30, 0, 0.3));
     c.lerp(sand, 0.85 * (1 - smooth(WATER_Y + 0.4, WATER_Y + 2.6, y)));
+    if (y < -30) c.lerp(VOID, 1 - smooth(-140, -30, y));   // the walls of the void go dark
     col.push(c.r, c.g, c.b);
   };
   tint(0, 0, 0);

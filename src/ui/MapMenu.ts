@@ -129,6 +129,8 @@ export class MapMenu extends Screen {
         ctx.strokeStyle = pure ? '#ffe27a' : o.purity < 1 ? '#8a8a8a' : '#000'; ctx.lineWidth = pure ? 2.5 : 1.5; ctx.stroke();
       }
     }
+    ctx.strokeStyle = '#f0e8ff'; ctx.lineWidth = 3;   // giant arches
+    for (const [x, z, r] of planet.marks.arches) { ctx.beginPath(); ctx.arc(X(x), Y(z), Math.max(5, r * k), Math.PI, 0); ctx.stroke(); }
     const hub = planet.hub;
     if (hub) { ctx.save(); ctx.translate(X(hub.pose.x), Y(hub.pose.z)); ctx.rotate(-hub.pose.yaw); ctx.fillStyle = '#b8c4d8'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; const w = Math.max(8, 12.4 * k), d = Math.max(5, 5.4 * k); ctx.fillRect(-w / 2, -d / 2, w, d); ctx.strokeRect(-w / 2, -d / 2, w, d); ctx.restore(); }
     for (const pr of planet.props) { ctx.fillStyle = pr.kind === 'campfire' ? '#ff8a30' : '#6ff0ff'; ctx.beginPath(); ctx.arc(X(pr.x), Y(pr.z), 5, 0, 7); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }

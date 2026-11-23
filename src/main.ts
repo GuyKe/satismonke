@@ -67,6 +67,7 @@ async function boot() {
   const debugSkip = new URLSearchParams(location.search).get('skip'); // ?skip=planet jumps straight there
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.localClippingEnabled = true;   // the south void has no sea over it
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.1;
@@ -1072,7 +1073,11 @@ async function boot() {
     const headNow = new THREE.Vector3().copy(player.position).add(camera.position);
     if (appMode === 'menu' && (headNow.y < -2 || Math.abs(headNow.x) > 9.5 || Math.abs(headNow.z) > 9.5 || headNow.y > 16)) player.teleport(MENU_SPAWN);
     else if (appMode === 'game' && ship.visible && (headNow.y < -8 || headNow.length() > 14)) player.teleport(SPAWN);
-    else if (appMode === 'game' && planet && !ship.visible && headNow.y < -60) player.teleport(new THREE.Vector3(0, 3, 0));
+    else if (appMode === 'game' && planet && !ship.visible && headNow.y < -60) {   // fell into the void (or somehow out of the world)
+      const hubP = planet.hub?.pose;
+      player.teleport(hubP ? toWorld([0, 0.95, 0], hubP) : new THREE.Vector3(0, 3, 0));
+      if (planet.map.voidZ !== undefined) { health.hurt(20); sfx.hurt(); toast('You fell into the void: -20 HP', headPos()); chat('voidFall', 20); }
+    }
 
     // Hazards: poison clouds, radiation and hard landings
     const gear: Gear = { mask: progress.has('gasmask'), hazmat: progress.has('hazmat'), boots: progress.has('bladerunners') };

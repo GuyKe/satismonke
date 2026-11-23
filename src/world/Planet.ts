@@ -10,7 +10,7 @@ import type { Quality } from '../settings';
 import { Zone, exposure } from '../game/Hazards';
 import { heightAt, buildTerrainMesh, pathMask, PONDS, LAKE, pondY, WATER_Y } from './Terrain';
 import { getMap, MapDef } from './MapDef';
-import { makeWater } from './Animals';
+import { makeWater, makePuffhog } from './Animals';
 
 export interface TreeRec {
   pine: boolean; x: number; y: number; z: number; h: number;
@@ -184,7 +184,7 @@ export class Planet {
   onRespawn: ((kind: Harvest, index: number) => void) | null = null;
   private falling: { rec: TreeRec; group: THREE.Group; t: number; axis: THREE.Vector3; landed: boolean }[] = [];
   /** Landmarks for the map. */
-  readonly marks = { mesas: [] as [number, number, number][], buttes: [] as [number, number, number][], spires: [] as [number, number, number][], crystals: [] as [number, number][] };
+  readonly marks = { arches: [] as [number, number, number][], mesas: [] as [number, number, number][], buttes: [] as [number, number, number][], spires: [] as [number, number, number][], crystals: [] as [number, number][] };
   /** A tree has finished falling and vanished: here is the wood it gave. */
   onWood: ((amount: number, pos: THREE.Vector3) => void) | null = null;
   /** A felled tree hit the ground. */
@@ -259,10 +259,12 @@ export class Planet {
   private grassCenter = new THREE.Vector2(1e9, 1e9);
   private leapState = new Map<Animal, { t: number; next: number }>();
 
+  private seedBase = 0;
   /** The map this planet is (set before it is built with Terrain.setMap). */
   readonly map: MapDef = getMap();
 
   constructor(seed = getMap().seed, readonly quality: Quality = 'medium') {
+    this.seedBase = seed;
     this.q = QUALITY[quality];
     const rng = rngFrom(seed);
     this.world.hull = false; this.world.heightFn = heightAt; this.world.groundSlip = 0.1;
@@ -271,6 +273,7 @@ export class Planet {
     const waterMat = new THREE.MeshStandardMaterial({ color: 0x3fd6e6, emissive: 0x0a6a78, emissiveIntensity: 0.6, transparent: true, opacity: 0.8, roughness: 0.15, metalness: 0.2 });
     this.water = new THREE.Mesh(new THREE.CircleGeometry(2400, 48).rotateX(-Math.PI / 2), waterMat);
     this.water.position.y = WATER_Y;
+    if (this.map.voidZ !== undefined) waterMat.clippingPlanes = [new THREE.Plane(new THREE.Vector3(0, 0, -1), this.map.voidZ + 6)];   // no sea over the void
     this.group.add(this.water);
     for (const pd of PONDS) {
       const w = new THREE.Mesh(new THREE.CircleGeometry(pd.r * 1.1, 28).rotateX(-Math.PI / 2), waterMat);
@@ -288,7 +291,8 @@ export class Planet {
     this.buildCrashSites(rng);
     this.buildFloatingRocks(rng);
     this.buildMushrooms(rng);
-    this.buildBushes(rngFrom(seed ^ 0x5bd1e995));   // its own random stream: the rest of the world stays as it was
+    this.buildBushes(rngFrom(seed ^ 0x5bd1e995));
+    this.buildArches(rngFrom(seed ^ 0x0a2c4e11));   // its own random stream: the rest of the world stays as it was
     this.buildMountains(rng);
     this.buildAnimals(rng);
     this.world.finalize();
@@ -418,8 +422,8 @@ export class Planet {
       if (y < ABOVE_WATER + 0.5 || Math.hypot(x, z) < 14 || pathMask(x, z) > 0.4) return false;
       if (clearings.some(c => Math.hypot(c.x - x, c.z - z) < c.r)) return false;
       if (tooClose(x, z, gap)) return false;
-      const big = this.map.id === 'jungle' ? 1.35 : 1;   // jungle trees tower
-      const sp = { x, z, y, h: (6 + rng() * 6) * big, cr: (2.2 + rng() * 1.4) * (big > 1 ? 1.2 : 1), c: Math.floor(rng() * 4), pine: rng() < 0.45 };
+      const big = this.map.treeSize;   // jungle trees tower, the plains' stay small
+      const sp = { x, z, y, h: (6 + rng() * 6) * big, cr: (2.2 + rng() * 1.4) * (big > 1 ? 1.2 : big < 1 ? big + 0.15 : 1), c: Math.floor(rng() * 4), pine: rng() < 0.45 };
       spots.push(sp);
       const key = gk(Math.floor(x / CELL), Math.floor(z / CELL)); const cell = grid.get(key); if (cell) cell.push(sp); else grid.set(key, [sp]);
       return true;
@@ -433,7 +437,7 @@ export class Planet {
         if (tryAdd(c.x + Math.cos(a) * d, c.z + Math.sin(a) * d)) added++;
       }
     }
-    for (let k = 0; k < Math.round(90 * this.map.trees) && spots.length < maxTrees; k++) { const p = this.dryPoint(rng, 18, WORLD_R); tryAdd(p.x, p.z, Math.round(GAP * 1.5)); }
+    for (let k = 0; k < (this.map.treeAttempts ?? Math.round(90 * this.map.trees)) && spots.length < maxTrees; k++) { const p = this.dryPoint(rng, 18, WORLD_R); tryAdd(p.x, p.z, Math.round(GAP * 1.5)); }
 
     // the crowded jungle: keep packing trees in until the world is thick with them, leaving just narrow ways through
     if (crowded) for (let k = 0; k < maxTrees * 7 && spots.length < maxTrees; k++) {
@@ -547,7 +551,7 @@ export class Planet {
       this.world.addPillar(x, z, top - 6, top, r * 1.7, 0.15);
     }
     // flat-topped buttes standing on the plains: climb them with good gloves
-    for (let i = 0; i < Math.round(12 * this.q.rocks); i++) {
+    for (let i = 0; i < Math.round(12 * this.q.rocks * this.map.buttes); i++) {
       const c = this.dryPoint(rng, 60, WORLD_R - 40, ABOVE_WATER + 3), r = 13 + rng() * 14, top = c.h + 9 + rng() * 14, base = c.h - 14;
       const m = rock(r * 0.9, r * 1.1, base, top); m.position.set(c.x, 0, c.z); this.group.add(m);
       const cap = new THREE.Mesh(new THREE.CircleGeometry(r * 0.9, 20).rotateX(-Math.PI / 2), grassMat);
@@ -585,7 +589,7 @@ export class Planet {
 
   /** Ore deposits to mine: copper and iron in veins on the plains, gold on high ground, plasma on the lake mesas. */
   private buildOres(rng: () => number): void {
-    const spots: { type: Ore; x: number; y: number; z: number; r: number }[] = [];
+    const spots: { type: Ore; x: number; y: number; z: number; r: number; pure?: boolean }[] = [];
     const vein = (type: Ore, veins: number, per: number, rMin: number, rMax: number) => {
       for (let v = 0; v < veins; v++) {
         const c = this.dryPoint(rng, 20, WORLD_R, ABOVE_WATER + 0.5);
@@ -598,6 +602,14 @@ export class Planet {
     const om = this.q.ores * this.map.ores;
     vein('copper', Math.max(2, Math.round(16 * om)), 3, 0.9, 1.6);
     vein('iron', Math.max(2, Math.round(14 * om)), 3, 0.9, 1.6);
+    // the crater's rim: a ring of rich nodes around the east crater lake (a reward for the hike)
+    if (this.map.craterOres) {
+      const c = this.map.craterOres, cr = rngFrom(this.seedBase ^ 0x1f3d5b79);
+      for (let k = 0; k < 18; k++) {
+        const a = (k / 18) * Math.PI * 2 + cr() * 0.2, d = c.r + 4 + cr() * 14, x = c.x + Math.cos(a) * d, z = c.z + Math.sin(a) * d, y = heightAt(x, z);
+        if (y > ABOVE_WATER + 0.5 && Math.hypot(x, z) < WORLD_R + 20 && !(this.map.voidZ !== undefined && z > this.map.voidZ - 20)) spots.push({ type: k % 3 === 2 ? 'copper' : 'iron', x, y, z, r: 1.3 + cr() * 0.4, pure: true });
+      }
+    }
     // gold: the highest ground within reach
     const high: { x: number; z: number; y: number }[] = [];
     for (let i = 0; i < 900; i++) { const a = rng() * Math.PI * 2, r = 70 + rng() * (WORLD_R - 70), x = Math.cos(a) * r, z = Math.sin(a) * r; high.push({ x, z, y: heightAt(x, z) }); }
@@ -638,7 +650,7 @@ export class Planet {
         rock.setMatrixAt(k, m); specks.setMatrixAt(k, m);
         this.world.addSphere(new THREE.Vector3(s.x, s.y + s.r * 0.35, s.z), s.r * 0.85, 0.3, ORE_OWNER + slot);
         const pr = rng();
-        this.oreRecs.push({ type, x: s.x, y: s.y, z: s.z, r: s.r, hits: 0, broken: false, slot: k, purity: pr < this.map.purity[0] ? 0.5 : pr < this.map.purity[1] ? 1 : 2, matrix: m.clone(), mark: -1 });
+        this.oreRecs.push({ type, x: s.x, y: s.y, z: s.z, r: s.r, hits: 0, broken: false, slot: k, purity: s.pure ? 2 : pr < this.map.purity[0] ? 0.5 : pr < this.map.purity[1] ? 1 : 2, matrix: m.clone(), mark: -1 });
       });
       this.oreMeshes[type] = { rock, specks };
       this.group.add(rock, specks);
@@ -921,6 +933,35 @@ export class Planet {
     this.group.add(stems, caps);
   }
 
+  /** Giant stone arches standing on the open fields: walk under them, climb them, use them to find your way. */
+  private buildArches(rng: () => number): void {
+    const n = this.map.arches; if (!n) return;
+    const rock = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true });
+    const band = this.map.mesa.map(c => new THREE.Color(c)), c = new THREE.Color();
+    const placed: { x: number; z: number }[] = [];
+    for (let k = 0; k < n * 14 && placed.length < n; k++) {
+      const p = this.dryPoint(rng, 80, WORLD_R - 60, ABOVE_WATER + 1.5);
+      if (placed.some(o => Math.hypot(o.x - p.x, o.z - p.z) < 120)) continue;
+      const R = 13 + rng() * 11, tube = R * 0.2, yaw = rng() * Math.PI, dx = Math.cos(yaw), dz = Math.sin(yaw);
+      const h1 = heightAt(p.x + dx * R, p.z + dz * R), h2 = heightAt(p.x - dx * R, p.z - dz * R);
+      if (Math.min(h1, h2) < ABOVE_WATER + 0.5 || Math.abs(h1 - h2) > 2 || (this.map.voidZ !== undefined && p.z + R > this.map.voidZ - 30)) continue;
+      const y = Math.min(h1, h2) - 1.2;
+      const g = new THREE.TorusGeometry(R, tube, 9, 28, Math.PI), pos = g.attributes.position, col: number[] = [];
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), yy = pos.getY(i), zz = pos.getZ(i), j = 1 + (hash3(x, yy, zz) - 0.5) * 0.16;
+        pos.setXYZ(i, x * j, yy * j, zz * j);
+        c.copy(band[Math.floor(Math.max(0, yy) / 3.4) % band.length]).lerp(band[(Math.floor(Math.max(0, yy) / 3.4) + 1) % band.length], 0.3); col.push(c.r, c.g, c.b);
+      }
+      g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3)); g.computeVertexNormals();
+      const m = new THREE.Mesh(g, rock); m.position.set(p.x, y, p.z); m.rotation.y = -yaw; this.group.add(m);
+      for (let j = 0; j <= 18; j++) {   // solid along the whole arc, so you can climb it and nothing passes through
+        const th = (j / 18) * Math.PI, lx = Math.cos(th) * R, ly = Math.sin(th) * R;
+        this.world.addSphere(new THREE.Vector3(p.x + dx * lx, y + ly, p.z + dz * lx), tube * 0.95, 0.15);
+      }
+      placed.push(p); this.marks.arches.push([p.x, p.z, R]);
+    }
+  }
+
   /** Low bushes scattered about: punch one for biomass (leaves) to burn. They grow back. */
   private buildBushes(rng: () => number): void {
     const N = Math.max(40, Math.round(520 * this.q.trees * this.map.bushes));
@@ -992,6 +1033,7 @@ export class Planet {
     };
     const place = (an: Animal, rMin: number, rMax: number) => { const p = this.dryPoint(rng, rMin, rMax, ABOVE_WATER + 0.5); return add(an, p.x, p.h, p.z); };
     const nGround = Math.round(40 * q.animals * this.map.animals), nFly = Math.round(30 * q.animals * this.map.animals);
+    for (let i = 0; i < Math.round(this.map.hogs * Math.max(0.5, q.animals)); i++) place(makePuffhog(rng), 14, WORLD_R - 40);
     for (let i = 0; i < nGround; i++) place(makeGround(i, rng), 14, WORLD_R - 30);
     for (let i = 0; i < nFly; i++) place(makeFlyer(i, rng), 10, WORLD_R - 20);
 

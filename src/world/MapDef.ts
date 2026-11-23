@@ -27,6 +27,12 @@ export interface MapDef {
   treeHits?: number;
   /** Open fields cut out of the forest (jungle). */
   clearings?: number;
+  /** A bottomless drop: the land ends in a cliff at this z (the south edge) and below is a black void. */
+  voidZ?: number;
+  /** Giant stone arches, flat-topped buttes (1 = the old amount), puffhogs, tree height scale, extra tries at scattering trees. */
+  arches: number; buttes: number; hogs: number; treeSize: number; treeAttempts?: number;
+  /** A ring of rich (pure) ore nodes around a crater lake. */
+  craterOres?: { x: number; z: number; r: number };
   /** Bushes to pick biomass from (1 = the plains' amount), and their colours. */
   bushes: number; bushPalette: number[];
   /** Ore node rarity: below the first number is impure, below the second normal, the rest pure. */
@@ -71,11 +77,18 @@ function oases(): Lake[] {
 
 export const MAPS: Record<MapId, MapDef> = {
   plains: {
-    id: 'plains', name: 'GRASSY PLAINS', blurb: ['Rolling purple-pink fields,', 'lakes and a few forests.'], seed: 7,
-    ratings: { difficulty: 2, space: 4, resources: 3 },
-    hills: 1, base: 0, ridge: 17, canyons: 0, lakes: PLAINS_LAKES, ponds: PLAINS_PONDS, rivers: PLAINS_RIVERS,
-    bushes: 1, bushPalette: [0xd04fb8, 0x9a5fe0, 0x3fc7b4, 0xe86aa0], purity: [0.45, 0.92],
-    trees: 1, treeGap: 9, clusters: 1, boulders: 1, ores: 1, crystals: 1, mush: 1, grass: 1, sites: 1, animals: 1,
+    id: 'plains', name: 'GRASSY PLAINS', blurb: ['Wide flat fields with giant arches,', 'bushes and a void to the south.'], seed: 7,
+    ratings: { difficulty: 2, space: 5, resources: 3 },
+    // the flattest start of the three: wide level ground for sprawling bases, a few giant arches, small scattered trees and
+    // lots of bushes (biomass for the burners). Water is far away: crater lakes to the north and east. The south edge is a void.
+    hills: 0.3, base: 0, ridge: 17, canyons: 0, voidZ: 335,
+    lakes: [{ x: 0, z: -560, r: 360, depth: 20 }, { x: -250, z: -420, r: 90, depth: 16 }, { x: 240, z: -440, r: 100, depth: 16 }, { x: 430, z: -30, r: 120, depth: 22 }],
+    ponds: PLAINS_PONDS.filter(p => Math.hypot(p.x, p.z) > 270 && p.z < 300),
+    rivers: [],
+    craterOres: { x: 430, z: -30, r: 120 },
+    arches: 7, buttes: 0.25, hogs: 40, treeSize: 0.62, treeAttempts: 260,
+    bushes: 1.6, bushPalette: [0xd04fb8, 0x9a5fe0, 0x3fc7b4, 0xe86aa0], purity: [0.45, 0.92],
+    trees: 1.4, treeGap: 11, clusters: 0.35, boulders: 0.8, ores: 1, crystals: 1, mush: 1, grass: 1, sites: 1, animals: 0.55,
     groundA: 0xc650b4, groundB: 0x8a4acc, sand: 0xe6b4d8, dirt: [0.66, 0.44, 0.32],
     grassHsl: [0.76, 0.2, 0.55, 0.42],
     treePalette: [0x2fd1c1, 0xff6fb5, 0xffa940, 0x7d6bff], pinePalette: [0x38c9a0, 0x9a6bff, 0xff7ac0, 0x4aa8ff], trunk: 0x9a8fb8,
@@ -89,7 +102,7 @@ export const MAPS: Record<MapId, MapDef> = {
     ponds: PLAINS_PONDS.filter((_, i) => i % 2 === 0).map(p => ({ ...p, r: p.r * 0.7 })),
     rivers: PLAINS_RIVERS.map(r => ({ ...r, width: r.width * 0.65 })),
     bushes: 1.1, bushPalette: [0x1f9d62, 0x2fb870, 0x7fe05a, 0x0f6b4a], purity: [0.2, 0.7],
-    treeHits: 6, clearings: 10,
+    treeHits: 6, clearings: 10, arches: 0, buttes: 1, hogs: 0, treeSize: 1.35,
     trees: 39, treeGap: 2.8, clusters: 6.5, boulders: 2, ores: 2.4, crystals: 2.2, mush: 1.6, grass: 1.2, sites: 1.5, animals: 1.2,
     groundA: 0x2fb870, groundB: 0x178a5a, sand: 0x6a8a52, dirt: [0.34, 0.26, 0.16],
     grassHsl: [0.36, 0.1, 0.65, 0.34],
@@ -103,6 +116,7 @@ export const MAPS: Record<MapId, MapDef> = {
     lakes: PLAINS_LAKES.map(l => ({ ...l, r: l.r * 1.1 })), ponds: oases(),
     rivers: PLAINS_RIVERS.slice(0, 2).map(r => ({ ...r, width: r.width * 1.1 })),
     bushes: 0.3, bushPalette: [0x9bbf5a, 0xc8a050, 0x6fa05a, 0xd8b45a], purity: [0.55, 0.92],
+    arches: 3, buttes: 1, hogs: 0, treeSize: 1,
     trees: 0.2, treeGap: 22, clusters: 0.3, boulders: 0.55, ores: 0.42, crystals: 0.5, mush: 0.25, grass: 0.12, sites: 0.7, animals: 0.7,
     groundA: 0xf2d08c, groundB: 0xdcaa5e, sand: 0xf3dca8, dirt: [0.82, 0.62, 0.38],
     grassHsl: [0.12, 0.05, 0.5, 0.5],
