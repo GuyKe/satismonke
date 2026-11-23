@@ -108,6 +108,9 @@ export class Voice {
     }
   }
 
+  /** How loud this friend is, 0..1 (quiet speech ~0.3, shouting 1), for the mouth. */
+  loudness(id: string): number { const l = this.remotes.get(id)?.level ?? 0; return l < 0.012 ? 0 : Math.min(1, Math.sqrt((l - 0.012) / 0.2)); }
+
   /** Is this friend talking right now? */
   speaking(id: string): boolean { return (this.remotes.get(id)?.level ?? 0) > 0.012; }
   get connected(): number { return this.remotes.size; }

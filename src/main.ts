@@ -1073,7 +1073,7 @@ async function boot() {
     }
     if (net.state === 'lobby' || net.state === 'game') {
       voice.update(camera, id => remotes.headOf(id));
-      for (const p of net.list) if (p.id !== net.me.id) remotes.setSpeaking(p.id, voice.speaking(p.id));
+      for (const p of net.list) if (p.id !== net.me.id) { remotes.setSpeaking(p.id, voice.speaking(p.id)); remotes.setMouth(p.id, voice.loudness(p.id)); }
     }
     if (appMode === 'game' && net.state === 'game') {
       net.tick(dt, () => {
