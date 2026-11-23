@@ -11,6 +11,7 @@ import { Narrator, LINES, Line } from './ui/Narrator';
 import { D } from './ui/dialogue';
 import { Net } from './net/Multiplayer';
 import { Voice } from './net/Voice';
+import { LoadingScreen } from './ui/LoadingScreen';
 import { RemotePlayers } from './world/RemotePlayers';
 import { PlayerModel } from './world/PlayerModel';
 import { Health, Gear, damagePerSecond, fallDamage } from './game/Hazards';
@@ -426,7 +427,7 @@ async function boot() {
   net.onFactory = applyFactoryState;
   net.onBuild = d => { if (buildSystem && !net.isHost) buildSystem.load(d as BuildState); };
   net.snapshots = () => ({ f: factory.toJSON(), b: buildSystem?.toJSON() ?? null });
-  net.onStart = clock => { if (appMode !== 'game' || currentSlot >= 0) beginMultiplayer(clock); };
+  net.onStart = clock => { if (appMode !== 'game' || currentSlot >= 0) withLoading(() => beginMultiplayer(clock)); };
   const leaveLobby = () => { net.leave(); remotes.clear(); const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); };
   const beginMultiplayer = (clock: number) => {
     resetGame();
@@ -437,6 +438,15 @@ async function boot() {
     const idx = Math.max(0, net.list.map(p => p.id).sort().indexOf(net.me.id));
     player.teleport(new THREE.Vector3(Math.cos(idx * 1.3) * idx * 2.5, 0.1, Math.sin(idx * 1.3) * idx * 2.5));
     refreshLobby();
+  };
+
+  // ---- Loading screen: shown while a world is being built ----
+  const loading = new LoadingScreen(net.me.color);
+  const fastLoad = new URLSearchParams(location.search).has('fastload');
+  let loadJob: (() => void) | null = null, loadFrames = 0, loadMin = 0;
+  /** Show the loading screen, run `job` a few frames later (so the screen is up first), and keep it up for a moment. */
+  const withLoading = (job: () => void, minSeconds = 4) => {
+    loading.show(); loadJob = job; loadFrames = 0; loadMin = fastLoad ? 0 : minSeconds;
   };
 
   const beginGame = (slot: number, mode: 'new' | 'load') => {
@@ -462,7 +472,7 @@ async function boot() {
       menu.showMessage(['THRUSTERS FAILED', 'DEPLOYING EMERGENCY', 'BRAKES']);
     },
     onCrash: () => { sfx.stopAlarm(); sfx.crash(); chat('podCrash', 0); },
-    onLand: () => startPlanet(null),
+    onLand: () => withLoading(() => startPlanet(null), 3.5),
     onSkip: () => { sfx.stopAlarm(); sfx.duck(); },   // B in the capsule: straight to the title
   });
 
@@ -472,7 +482,7 @@ async function boot() {
   scene.add(menuRoom.group);
   menuRoom.group.visible = false;
   const handlers: MenuHandlers = {
-    onStart: (slot, mode) => beginGame(slot, mode),
+    onStart: (slot, mode) => { const d = mode === 'load' ? readSlot(slot) : null; if (d && d.phase === 'planet') withLoading(() => beginGame(slot, mode)); else beginGame(slot, mode); },
     onDelete: slot => deleteSlot(slot),
     onResume: () => togglePause(false),
     onSave: () => pausePanel.flash(currentSlot < 0 ? 'Lobby games are not saved' : saveGame() ? 'Game saved' : 'Could not save'),
@@ -1135,6 +1145,12 @@ async function boot() {
       });
       remotes.update(dt);
     }
+    if (loading.active) {
+      rig.updateMatrixWorld(true);
+      loading.update(dt, camera);
+      if (loadJob && ++loadFrames >= (fastLoad ? 1 : 3)) { const j = loadJob; loadJob = null; j(); }
+      else if (!loadJob && loading.shownFor >= loadMin) loading.hide();
+    }
     narrator.update(dt);
 
     // Wrist displays and the desktop text overlay
@@ -1153,12 +1169,12 @@ async function boot() {
     if (planet) planet.update(simDt, scene, player.position, headW);
     if (appMode === 'game' && planet && story.phase === 'planet' && !pauseOpen && (autosave += dt) > 45) { autosave = 0; saveGame(); }
 
-    renderer.render(scene, camera);
+    renderer.render(loading.active ? loading.scene : scene, camera);
   });
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    health, narrator, net, remotes, voice, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    health, narrator, net, remotes, voice, loading, withLoading, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
     get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },
