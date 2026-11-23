@@ -194,3 +194,15 @@ In a lobby the **host owns the factory and the buildings**. Clients validate and
 
 ## Lip sync
 `Voice.loudness(id)` (0..1, from the incoming audio level) drives `PlayerModel.setMouth`: the smile turns into an open mouth with a tongue that grows taller the louder the friend talks (opens fast, closes a little slower). Wired in `src/main.ts` next to the speaking indicator.
+
+## Steel from ore
+X menu -> **Forge Steel** (repeatable, unlocked after mining 2 iron): 6 iron + 3 stone -> 2 steel, so crashed pods are no longer the only steel source. Recipes can now have `gives` (items handed over instead of placing something).
+
+## Power poles and power lines
+Machines only run when they are on a power network that has supply. `Factory.wires` joins a **Power Pole** (`pole` machine) to a machine, generator or the Hub (`HUB_NODE`); one end of every wire must be a pole, wires are at most `WIRE_RANGE` (35 m) and a pole holds `POLE_PORTS` (8). Each connected component balances its own supply (burners with fuel, solar panels, plus the Hub's roof/reactor if the Hub is on it) against its demand, and trips its own breaker (`Factory.balancePower`). A pole built within `HUB_PLUG_RANGE` of the Hub plugs into it automatically. The **Power Line** recipe is a tool like the Conveyor Link (aim at one end, trigger, aim at the other; costs 1 copper per 6 m). Old saves have no `wires` field and keep the old single shared grid (`Factory.legacyGrid`). `tests/factory.power.ts` (`npm run test:power`) covers networks, trips, the Hub node, legacy saves and snapshots. In multiplayer, wires travel in factory snapshots and `wire`/`unwire` host requests.
+
+## Loading screen
+`src/ui/LoadingScreen.ts` has its own scene (the world never shows through): your pioneer waving on a plate beside a tip panel, head-locked. `withLoading(job, minSeconds)` in `src/main.ts` shows it, runs the job a few frames later and keeps it up for at least a few seconds. Used for loading a saved planet, landing after the crash, and starting a lobby game. Tips are in `TIPS`; `RARE_TIPS` (6% chance) includes the Claude one. `?fastload` skips the delay (tests use it).
+
+## Realms (hosted multiplayer saves)
+The host's lobby page has **SAVING: ON/OFF** and **MAX PLAYERS**. With saving on, the pause menu's SAVE GAME saves a realm (`saveRealm` in `src/main.ts`, stored in the host's localStorage under `satismonke.realm.<CODE>`, see `src/game/Realm.ts`): the planet/factory/buildings, the host's progress, and every connected player's progress and position (collected with `Net.collectProgress`). Everyone in the lobby at a save becomes a member (earlier members stay members). Members are recognised by a persistent `playerId()`. **MULTIPLAYER -> MY REALMS** lists realms you host (HOST / DEL) and realms you are a member of (JOIN / LEAVE). Hosting a realm reuses its code; non-members are refused ("You are not a member of this realm"); members get their own inventory and position back when they join; the world's used-up resources, Hub and props are replayed to everyone. Autosaves every 45 s when saving is on. Test: `tests/realm.mjs`.

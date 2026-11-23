@@ -9,7 +9,8 @@ import { BuildSystem, BuildState, Plan, Piece, PieceType, PALETTE, COST as BUILD
 import { BuildPanel } from './ui/BuildPanel';
 import { Narrator, LINES, Line } from './ui/Narrator';
 import { D } from './ui/dialogue';
-import { Net } from './net/Multiplayer';
+import { Net, playerId } from './net/Multiplayer';
+import type { RealmSeed } from './net/Multiplayer';
 import { Voice } from './net/Voice';
 import { LoadingScreen } from './ui/LoadingScreen';
 import { RemotePlayers } from './world/RemotePlayers';
@@ -22,7 +23,8 @@ import { MachinePanel, MachineAction } from './ui/MachinePanel';
 import { MenuRoom, Slide } from './world/MenuRoom';
 import { takeSnapshots } from './world/Snapshots';
 import { MenuPanel, MenuHandlers } from './ui/MenuPanel';
-import { SaveData, readSlot, writeSlot, deleteSlot } from './game/Save';
+import { SaveData, readSlot, writeSlot, deleteSlot, formatAgo } from './game/Save';
+import { RealmSave, listRealms, readRealm, writeRealm, deleteRealm, listJoined, rememberJoined, forgetJoined } from './game/Realm';
 import { disposeObject } from './util/dispose';
 import { buildCampfire, buildLamp, makeGhost, PropKind } from './world/Props';
 import { buildHubMesh, HubMesh } from './world/Hub';
@@ -340,16 +342,18 @@ async function boot() {
     sfx.startWind();
   };
 
-  const saveGame = (): boolean => {
-    if (currentSlot < 0) return false; // lobby games are not saved
+  const buildSave = (): SaveData => {
     const onPlanet = !!planet && (story.phase === 'planet' || story.phase === 'landing');
-    const d: SaveData = {
+    return {
       version: 2, savedAt: Date.now(), playSeconds: Math.round(playSeconds),
       phase: onPlanet ? 'planet' : 'capsule', objective: onPlanet ? progress.objective()[0] : 'In the pod',
       progress: progress.toJSON(), player: { x: player.position.x, y: player.position.y, z: player.position.z },
       planet: onPlanet ? { ...planet!.exportState(), factory: factory.toJSON(), build: buildSystem?.toJSON() } : null,
     };
-    return writeSlot(currentSlot, d);
+  };
+  const saveGame = (): boolean => {
+    if (currentSlot < 0) return false; // lobby games are saved as realms instead (see saveRealm)
+    return writeSlot(currentSlot, buildSave());
   };
 
   /** Throw away everything about the running game. */
@@ -385,7 +389,7 @@ async function boot() {
   scene.add(remotes.group);
   const voice = new Voice();
   const lobbyInfo = () => net.state === 'off' ? null : {
-    mic: voice.state, code: net.code, isHost: net.isHost, status: net.state, error: net.error,
+    allowSaving: net.allowSaving, maxPlayers: net.maxPlayers, realm: net.members !== null, mic: voice.state, code: net.code, isHost: net.isHost, status: net.state, error: net.error,
     players: net.list.map(p => ({ name: p.name + (p.id === net.me.id ? ' (you)' : ''), color: p.color })),
   };
   const refreshLobby = () => {
@@ -400,7 +404,8 @@ async function boot() {
   net.onLeave = id => remotes.remove(id);
   net.onWorld = (k, i, d) => applyWorldEvent(k, i, d);
   net.onClock = c => { if (planet && Math.abs(planet.clock - c) > 1.5) planet.clock = c; };
-  net.getClock = () => planet?.clock ?? 40;
+  let pendingRealm: RealmSave | null = null;   // the realm this host is hosting (its saved world loads when they press START)
+  net.getClock = () => planet?.clock ?? pendingRealm?.world.planet?.clock ?? 40;
   let factoryDirty = false, snapT = 0, sentBuildV = -1;
   const markFactory = () => { factoryDirty = true; };
   const applyWorldEvent = (k: string, i: number, d?: number[]) => {
@@ -428,16 +433,67 @@ async function boot() {
   net.onBuild = d => { if (buildSystem && !net.isHost) buildSystem.load(d as BuildState); };
   net.snapshots = () => ({ f: factory.toJSON(), b: buildSystem?.toJSON() ?? null });
   net.onStart = clock => { if (appMode !== 'game' || currentSlot >= 0) withLoading(() => beginMultiplayer(clock)); };
-  const leaveLobby = () => { net.leave(); remotes.clear(); const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); };
+  const leaveLobby = () => { pendingRealm = null; net.leave(); remotes.clear(); const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); };
   const beginMultiplayer = (clock: number) => {
     resetGame();
     currentSlot = -1; appMode = 'game'; menuRoom.group.visible = false; autosave = 0; playSeconds = 0;
-    startPlanet(null); story.phase = 'planet';
-    if (planet) { planet.clock = clock; for (const [k, i, d] of net.worldLog) applyWorldEvent(k, i, d); if (!net.isHost) { if (net.lastFactory) applyFactoryState(net.lastFactory); if (net.lastBuild && buildSystem) buildSystem.load(net.lastBuild as BuildState); } }
+    const realmWorld = net.isHost ? pendingRealm?.world ?? null : null;
+    startPlanet(realmWorld && realmWorld.planet ? realmWorld : null); story.phase = 'planet';
+    if (net.isHost && realmWorld) playSeconds = realmWorld.playSeconds;
+    if (planet) { if (!realmWorld) planet.clock = clock; for (const [k, i, d] of net.worldLog) applyWorldEvent(k, i, d); if (!net.isHost) { if (net.lastFactory) applyFactoryState(net.lastFactory); if (net.lastBuild && buildSystem) buildSystem.load(net.lastBuild as BuildState); } }
     // spread friends out a little so nobody lands inside anyone else
     const idx = Math.max(0, net.list.map(p => p.id).sort().indexOf(net.me.id));
-    player.teleport(new THREE.Vector3(Math.cos(idx * 1.3) * idx * 2.5, 0.1, Math.sin(idx * 1.3) * idx * 2.5));
+    if (!realmWorld) player.teleport(new THREE.Vector3(Math.cos(idx * 1.3) * idx * 2.5, 0.1, Math.sin(idx * 1.3) * idx * 2.5));
+    // a member coming back to a realm gets their own inventory and place back
+    if (!net.isHost && net.restoreData) {
+      const r = net.restoreData; net.restoreData = null;
+      progress.load(r.progress as Parameters<typeof progress.load>[0]); applyGear();
+      if (r.pos) player.teleport(new THREE.Vector3(r.pos[0], r.pos[1] + 0.1, r.pos[2]));
+      toast('Welcome back: your progress is restored', headPos());
+    }
     refreshLobby();
+  };
+
+  // ---- Realms: a saved multiplayer world with a member list ----
+  net.onSaved = (code, host) => { rememberJoined(code, host); toast(`${host} saved the realm`, headPos()); };
+  net.onSaveReq = () => ({ d: progress.toJSON(), pos: [player.position.x, player.position.y, player.position.z] });
+  let savingRealm = false;
+  const saveRealm = async (silent = false): Promise<boolean> => {
+    if (!(net.isHost && net.state === 'game' && net.allowSaving && planet) || savingRealm) return false;
+    savingRealm = true;
+    try {
+      const world = buildSave();
+      const got = await net.collectProgress();
+      const old = net.members ? Object.fromEntries(net.members) : {};
+      const members: RealmSave['members'] = { ...old, [playerId()]: { name: net.me.name, color: net.me.color } };
+      const progressOf: RealmSave['progressOf'] = {};
+      for (const [pid, v] of net.memberData) progressOf[pid] = v;        // people who are not here keep what they had
+      for (const m of net.connectedPids) {
+        members[m.pid] = { name: m.name, color: m.color };
+        const g = got.get(m.pid); if (g) progressOf[m.pid] = { progress: g.progress, pos: g.pos };
+      }
+      delete progressOf[playerId()];
+      const realm: RealmSave = { version: 1, code: net.code, savedAt: Date.now(), hostName: net.me.name, maxPlayers: net.maxPlayers, members, progressOf, world };
+      if (!writeRealm(realm)) { if (!silent) toast('Could not save the realm', headPos()); return false; }
+      net.members = new Map(Object.entries(members)); net.memberData = new Map(Object.entries(progressOf));
+      net.announceSaved(); refreshLobby();
+      if (!silent) { sfx.craft(); toast(`Realm saved (${Object.keys(members).length} members)`, headPos()); }
+      return true;
+    } finally { savingRealm = false; }
+  };
+  const realmEntries = () => [
+    ...listRealms().map(r => ({ code: r.code, kind: 'host' as const, line1: `${Object.keys(r.members).length} members`, line2: `you host - ${formatAgo(r.savedAt)}` })),
+    ...listJoined().map(j => ({ code: j.code, kind: 'member' as const, line1: `host ${j.host}`, line2: `member - ${formatAgo(j.savedAt)}` })),
+  ];
+  /** The world's record of what has been used up, for friends who join a realm that is loaded from a save. */
+  const seedRealmWorld = () => {
+    const st = pendingRealm?.world.planet; if (!st) return;
+    const ev: [string, number, number[]?][] = [];
+    st.felledTrees.forEach(i => ev.push(['tree', i])); st.brokenBoulders.forEach(i => ev.push(['boulder', i])); st.brokenCrystals.forEach(i => ev.push(['crystal', i]));
+    st.brokenOres.forEach(i => ev.push(['ore', i])); (st.lootedSites ?? []).forEach(i => ev.push(['site', i]));
+    if (st.hub) ev.push(['hub', 0, [st.hub.x, st.hub.z, st.hub.yaw, st.hub.y]]);
+    st.props.forEach((p, i) => ev.push(['prop', 1000 + i, [p.kind === 'campfire' ? 0 : 1, p.x, p.z]]));
+    net.seedWorld(ev);
   };
 
   // ---- Loading screen: shown while a world is being built ----
@@ -485,7 +541,12 @@ async function boot() {
     onStart: (slot, mode) => { const d = mode === 'load' ? readSlot(slot) : null; if (d && d.phase === 'planet') withLoading(() => beginGame(slot, mode)); else beginGame(slot, mode); },
     onDelete: slot => deleteSlot(slot),
     onResume: () => togglePause(false),
-    onSave: () => pausePanel.flash(currentSlot < 0 ? 'Lobby games are not saved' : saveGame() ? 'Game saved' : 'Could not save'),
+    onSave: () => {
+      if (currentSlot >= 0) { pausePanel.flash(saveGame() ? 'Game saved' : 'Could not save'); return; }
+      if (!net.isHost) { pausePanel.flash('Only the host can save the realm'); return; }
+      if (!net.allowSaving) { pausePanel.flash('Turn SAVE on (top right) to save'); return; }
+      pausePanel.flash('Saving the realm...'); void saveRealm().then(ok => pausePanel.flash(ok ? 'Realm saved' : 'Could not save the realm'));
+    },
     onMainMenu: () => enterMainMenu(true),
     onSettings: () => {
       saveSettings(settings); sfx.setVolume(settings.volume);
@@ -493,10 +554,16 @@ async function boot() {
       renderer.setSize(innerWidth, innerHeight);
     },
     onResetArms: () => { settings.armSpan = 0; saveSettings(settings); },
-    onHost: () => net.host(),
+    onHost: () => { pendingRealm = null; net.host(); },
     onJoin: code => net.join(code),
     onLeaveLobby: () => leaveLobby(),
-    onStartLobby: () => net.start(),
+    onStartLobby: () => { if (net.isHost && net.members) seedRealmWorld(); net.start(); },
+    onToggleSaving: () => { if (net.isHost) { net.allowSaving = !net.allowSaving; refreshLobby(); } },
+    onCycleMax: () => { if (net.isHost) { net.maxPlayers = net.maxPlayers >= 8 ? 2 : net.maxPlayers + 1; refreshLobby(); } },
+    realms: realmEntries,
+    onRealmHost: code => { const r = readRealm(code); if (!r) return; pendingRealm = r; const seed: RealmSeed = { code: r.code, maxPlayers: r.maxPlayers, members: r.members, progressOf: r.progressOf as RealmSeed['progressOf'] }; net.host(0, seed); },
+    onRealmJoin: code => net.join(code),
+    onRealmRemove: (code, kind) => { if (kind === 'host') deleteRealm(code); else forgetJoined(code); },
     onToggleMic: () => toggleMic(),
   };
   const mainPanel = new MenuPanel('main', handlers, settings, 2.0);
@@ -1167,7 +1234,7 @@ async function boot() {
 
     if (inXR || planet) sfx.setListener(headW, new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion));
     if (planet) planet.update(simDt, scene, player.position, headW);
-    if (appMode === 'game' && planet && story.phase === 'planet' && !pauseOpen && (autosave += dt) > 45) { autosave = 0; saveGame(); }
+    if (appMode === 'game' && planet && story.phase === 'planet' && !pauseOpen && (autosave += dt) > 45) { autosave = 0; saveGame(); if (net.isHost && net.state === 'game' && net.allowSaving) void saveRealm(true); }
 
     renderer.render(loading.active ? loading.scene : scene, camera);
   });

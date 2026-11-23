@@ -6,9 +6,11 @@ import { CODE_CHARS, CODE_LEN } from '../net/Multiplayer';
 import { CONTROLS_LINES, HOWTO_LINES, RESOURCE_GUIDE } from './helpText';
 
 const W = 800, H = 500;
-type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby';
+type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby' | 'realms';
 
-export interface LobbyInfo { mic: string; code: string; isHost: boolean; status: 'connecting' | 'lobby' | 'game' | 'error'; error: string; players: { name: string; color: number }[] }
+/** A saved realm, either one you host or one you are a member of. */
+export interface RealmEntry { code: string; kind: 'host' | 'member'; line1: string; line2: string }
+export interface LobbyInfo { allowSaving: boolean; maxPlayers: number; realm: boolean; mic: string; code: string; isHost: boolean; status: 'connecting' | 'lobby' | 'game' | 'error'; error: string; players: { name: string; color: number }[] }
 const GUIDE_PER_PAGE = 4;
 
 interface Btn { label: string; x: number; y: number; w: number; h: number; act: () => void; danger?: boolean; dim?: boolean }
@@ -28,6 +30,12 @@ export interface MenuHandlers {
   onLeaveLobby(): void;
   onStartLobby(): void;
   onToggleMic(): void;
+  onToggleSaving(): void;
+  onCycleMax(): void;
+  realms(): RealmEntry[];
+  onRealmHost(code: string): void;
+  onRealmJoin(code: string): void;
+  onRealmRemove(code: string, kind: 'host' | 'member'): void;
 }
 
 /** The main menu (PLAY / CONTROLS / HOW TO PLAY, with save slots) and the in-game pause menu. */
@@ -38,6 +46,8 @@ export class MenuPanel extends Screen {
   private slots: (SaveData | null)[] = [];
   private armedDelete = -1;
   private armedAt = 0;
+  private armedRealm = '';
+  private realmList: RealmEntry[] = [];
   private status = '';
   private statusT = 0;
   private dirty = true;
@@ -78,7 +88,10 @@ export class MenuPanel extends Screen {
         break;
       case 'pause':
         this.btns = col([['RESUME', () => this.h.onResume()], ['SAVE GAME', () => this.h.onSave()], ['SETTINGS', () => this.go('settings')], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['FIND RESOURCES', () => this.go('guide')], ['SAVE & MAIN MENU', () => this.h.onMainMenu()]], 84, 50, 8);
-        if (this.lobby && this.lobby.code) this.btns.push({ label: this.micLabel(this.lobby.mic), x: 640, y: 48, w: 140, h: 36, dim: this.lobby.mic === 'nomic', act: () => this.h.onToggleMic() });
+        if (this.lobby && this.lobby.code) {
+          this.btns.push({ label: this.micLabel(this.lobby.mic), x: 640, y: 48, w: 140, h: 36, dim: this.lobby.mic === 'nomic', act: () => this.h.onToggleMic() });
+          if (this.lobby.isHost) this.btns.push({ label: this.lobby.allowSaving ? 'SAVE: ON' : 'SAVE: OFF', x: 490, y: 48, w: 140, h: 36, act: () => this.h.onToggleSaving() });
+        }
         break;
       case 'slots':
         this.slots = listSlots();
@@ -97,7 +110,7 @@ export class MenuPanel extends Screen {
         this.btns.push(this.back());
         break;
       case 'multi':
-        this.btns = col([['CREATE LOBBY', () => this.h.onHost()], ['JOIN WITH CODE', () => { this.code = ''; this.go('join'); }]], 140, 76, 20);
+        this.btns = col([['CREATE LOBBY', () => this.h.onHost()], ['JOIN WITH CODE', () => { this.code = ''; this.go('join'); }], ['MY REALMS', () => { this.armedRealm = ''; this.go('realms'); }]], 132, 62, 14);
         this.btns.push(this.back());
         break;
       case 'join': {
@@ -111,10 +124,27 @@ export class MenuPanel extends Screen {
         );
         break;
       }
+      case 'realms': {
+        this.realmList = this.h.realms().slice(0, 4);
+        this.btns = [];
+        this.realmList.forEach((r, i) => {
+          const y = 96 + i * 74;
+          this.btns.push({ label: r.kind === 'host' ? 'HOST' : 'JOIN', x: 540, y: y + 6, w: 130, h: 54, act: () => (r.kind === 'host' ? this.h.onRealmHost(r.code) : this.h.onRealmJoin(r.code)) });
+          const id = r.kind + r.code;
+          this.btns.push({ label: this.armedRealm === id ? 'SURE?' : r.kind === 'host' ? 'DEL' : 'LEAVE', x: 684, y: y + 6, w: 100, h: 54, danger: true,
+            act: () => { if (this.armedRealm === id) { this.h.onRealmRemove(r.code, r.kind); this.armedRealm = ''; this.build(); } else { this.armedRealm = id; this.armedAt = performance.now(); this.build(); } } });
+        });
+        this.btns.push({ label: 'BACK', x: 280, y: 410, w: 240, h: 60, act: () => this.go('multi') });
+        break;
+      }
       case 'lobby': {
         const l = this.lobby;
         this.btns = [];
-        if (l && l.status === 'lobby' && l.isHost) this.btns.push({ label: 'START GAME', x: 190, y: 330, w: 420, h: 66, act: () => this.h.onStartLobby() });
+        if (l && l.status === 'lobby' && l.isHost) {
+          this.btns.push({ label: `SAVING: ${l.allowSaving ? 'ON' : 'OFF'}`, x: 40, y: 300, w: 350, h: 46, act: () => this.h.onToggleSaving() });
+          this.btns.push({ label: `MAX PLAYERS: ${l.maxPlayers}`, x: 410, y: 300, w: 350, h: 46, act: () => this.h.onCycleMax() });
+          this.btns.push({ label: l.realm ? 'START REALM' : 'START GAME', x: 190, y: 354, w: 420, h: 48, act: () => this.h.onStartLobby() });
+        }
         if (l && l.status !== 'error' && l.status !== 'connecting') this.btns.push({ label: this.micLabel(l.mic), x: 30, y: 410, w: 200, h: 60, dim: l.mic === 'nomic', act: () => this.h.onToggleMic() });
         this.btns.push({ label: l && l.status === 'error' ? 'BACK' : 'LEAVE LOBBY', x: 250, y: 410, w: 300, h: 60, danger: true, act: () => { this.h.onLeaveLobby(); this.go('multi'); } });
         break;
@@ -173,6 +203,7 @@ export class MenuPanel extends Screen {
   update(dt: number): void {
     if (this.statusT > 0 && (this.statusT -= dt) <= 0) { this.status = ''; this.dirty = true; }
     if (this.armedDelete >= 0 && performance.now() - this.armedAt > 3000) { this.armedDelete = -1; this.build(); }
+    if (this.armedRealm && performance.now() - this.armedAt > 3000) { this.armedRealm = ''; this.build(); }
     if (this.dirty) this.draw();
   }
 
@@ -183,7 +214,7 @@ export class MenuPanel extends Screen {
     ctx.fillStyle = '#080c18'; ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 6; ctx.strokeRect(5, 5, W - 10, H - 10);
     ctx.fillStyle = '#ffb347';
-    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY' };
+    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY', realms: 'MY REALMS' };
     ctx.font = this.page === 'main' ? 'bold 72px monospace' : 'bold 48px monospace';
     ctx.fillText(titles[this.page], W / 2, this.page === 'main' ? 110 : 66);
 
@@ -191,6 +222,16 @@ export class MenuPanel extends Screen {
       ctx.fillStyle = '#9ab'; ctx.font = '20px monospace';
       ctx.fillText('Play the planet with friends. One of you creates a lobby,', W / 2, 108);
       ctx.fillText('the others type its 4-letter code. Everyone starts fresh.', W / 2, 132);
+    }
+    if (this.page === 'realms') {
+      if (!this.realmList.length) { ctx.fillStyle = '#9ab'; ctx.font = '22px monospace'; ctx.fillText('No realms yet.', W / 2, 190); ctx.fillText('Host a lobby with SAVING: ON, then save from the pause menu.', W / 2, 224); }
+      this.realmList.forEach((r, i) => {
+        const y = 96 + i * 74;
+        ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(24, y, 764, 66);
+        ctx.textAlign = 'left'; ctx.fillStyle = r.kind === 'host' ? '#ffb347' : '#7fe3c1'; ctx.font = 'bold 30px monospace'; ctx.fillText(r.code.split('').join(' '), 44, y + 32);
+        ctx.fillStyle = '#9ab'; ctx.font = '17px monospace'; ctx.fillText(r.line1, 44, y + 52); ctx.fillText(r.line2, 270, y + 32);
+      });
+      ctx.textAlign = 'center';
     }
     if (this.page === 'join') {
       ctx.fillStyle = '#fff'; ctx.font = 'bold 64px monospace';
@@ -202,7 +243,7 @@ export class MenuPanel extends Screen {
       else if (l.status === 'error') { ctx.fillStyle = '#ff8a8a'; ctx.font = 'bold 26px monospace'; ctx.fillText(l.error || 'Something went wrong', W / 2, 220); }
       else if (l.status === 'connecting') { ctx.fillStyle = '#9ab'; ctx.font = '28px monospace'; ctx.fillText('Connecting...', W / 2, 220); }
       else {
-        ctx.fillStyle = '#9ab'; ctx.font = '22px monospace'; ctx.fillText('LOBBY CODE', W / 2, 104);
+        ctx.fillStyle = l.realm ? '#ffb347' : '#9ab'; ctx.font = '22px monospace'; ctx.fillText(l.realm ? 'REALM CODE (members only)' : 'LOBBY CODE', W / 2, 104);
         ctx.fillStyle = '#7fe3c1'; ctx.font = 'bold 72px monospace'; ctx.fillText(l.code.split('').join(' '), W / 2, 172);
         ctx.textAlign = 'left'; ctx.font = '24px monospace';
         l.players.slice(0, 8).forEach((p, i) => {

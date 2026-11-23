@@ -12,9 +12,16 @@ export type Pose = number[];
 /** A request to the host (place a machine, build a wall...) or its answer. */
 export type Op = Record<string, unknown>;
 export type WorldEvent = [string, number, number[]?];
+/** What hosting a saved realm needs from its save. */
+export interface RealmSeed { code: string; maxPlayers: number; members: Record<string, { name: string; color: number }>; progressOf: Record<string, { progress: unknown; pos: number[] | null }> }
 
 type Msg =
-  | { t: 'hello'; name: string; color: number }
+  | { t: 'hello'; name: string; color: number; pid: string }
+  | { t: 'reject'; msg: string }
+  | { t: 'restore'; d: unknown; pos: number[] | null }
+  | { t: 'saveReq' }
+  | { t: 'prog'; d: unknown; pos: number[] }
+  | { t: 'saved'; code: string; host: string }
   | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[]; world: WorldEvent[] }
   | { t: 'join'; p: PlayerInfo }
   | { t: 'leave'; id: string }
@@ -40,6 +47,14 @@ export function savedColor(): number {
   const c = pickColor();
   try { localStorage.setItem('satismonke.fur', String(c)); } catch { /* ignore */ }
   return c;
+}
+
+/** Who you are across sessions (so a realm can recognise you when you come back). */
+export function playerId(): string {
+  try { const v = localStorage.getItem('satismonke.pid'); if (v) return v; } catch { /* private mode */ }
+  const id = Array.from({ length: 14 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
+  try { localStorage.setItem('satismonke.pid', id); } catch { /* ignore */ }
+  return id;
 }
 
 export function randomCode(): string {
@@ -71,6 +86,21 @@ export class Net {
   /** Clients: the host's latest factory / building snapshots. */
   onFactory: (d: unknown) => void = () => {};
   onBuild: (d: unknown) => void = () => {};
+  /** Host settings for this lobby. */
+  allowSaving = false;
+  maxPlayers = 8;
+  /** Realm members (by player id): once a lobby has been saved, only they can join it. null = open lobby. */
+  members: Map<string, { name: string; color: number }> | null = null;
+  /** Host: saved progress of members, handed back when they rejoin. */
+  memberData = new Map<string, { progress: unknown; pos: number[] | null }>();
+  /** Client: progress/position the host restored for us (applied when the world starts). */
+  restoreData: { progress: unknown; pos: number[] | null } | null = null;
+  /** Client: the host saved the realm. */
+  onSaved: (code: string, host: string) => void = () => {};
+  /** Client: the host asks for our progress to save it. */
+  onSaveReq: () => { d: unknown; pos: number[] } = () => ({ d: null, pos: [0, 0, 0] });
+  private peerPid = new Map<string, string>();     // host: peer id -> player id
+  private pendingProg: ((peer: string, d: unknown, pos: number[]) => void) | null = null;
   lastFactory: unknown = null;
   lastBuild: unknown = null;
   /** Host: current snapshots for someone who just joined. */
@@ -102,9 +132,10 @@ export class Net {
   get list(): PlayerInfo[] { return [this.me, ...[...this.players.values()].filter(p => p.id !== this.me.id)]; }
 
   /** Create a lobby and wait for friends. */
-  host(attempt = 0): void {
+  host(attempt = 0, realm?: RealmSeed): void {
     this.leave(true);
-    this.state = 'connecting'; this.isHost = true; this.error = ''; this.code = randomCode(); this.onChange();
+    this.state = 'connecting'; this.isHost = true; this.error = ''; this.code = attempt > 0 || !realm ? randomCode() : realm.code; this.onChange();
+    if (realm) { this.members = new Map(Object.entries(realm.members)); this.allowSaving = true; this.maxPlayers = realm.maxPlayers; for (const [pid, v] of Object.entries(realm.progressOf)) this.memberData.set(pid, v); }
     const peer = new Peer(PREFIX + this.code, this.peerOptions());
     this.peer = peer;
     peer.on('open', id => {
@@ -113,6 +144,7 @@ export class Net {
     });
     peer.on('connection', c => this.hostAccept(c));
     peer.on('error', (e: { type?: string; message?: string }) => {
+      if (e.type === 'unavailable-id' && realm) { this.fail('That realm is still online or its code is busy. Try again in a minute.'); return; }
       if (e.type === 'unavailable-id' && attempt < 5) { peer.destroy(); this.host(attempt + 1); return; }
       this.fail(e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' ? 'Cannot reach the lobby server' : (e.message ?? 'Network error'));
     });
@@ -130,9 +162,9 @@ export class Net {
       this.myId = id; this.me.id = id;
       const c = peer.connect(PREFIX + code, { reliable: true });
       this.conns.set('host', c);
-      c.on('open', () => c.send({ t: 'hello', name: this.me.name, color: this.me.color } as Msg));
+      c.on('open', () => c.send({ t: 'hello', name: this.me.name, color: this.me.color, pid: playerId() } as Msg));
       c.on('data', d => this.clientMsg(d as Msg));
-      c.on('close', () => { if (this.state !== 'off') this.fail('The host closed the lobby'); });
+      c.on('close', () => { if (this.state !== 'off' && this.state !== 'error') this.fail('The host closed the lobby'); });
     });
     peer.on('error', (e: { type?: string; message?: string }) => {
       clearTimeout(timeout);
@@ -142,6 +174,7 @@ export class Net {
 
   leave(quiet = false): void {
     this.peer?.destroy(); this.peer = null; this.conns.clear(); this.players.clear();
+    this.members = null; this.allowSaving = false; this.maxPlayers = 8; this.memberData.clear(); this.restoreData = null; this.peerPid.clear();
     this.state = 'off'; this.isHost = false; this.code = ''; this.worldLog = []; this.worldSeen.clear(); this.pendingOps.clear(); this.lastFactory = this.lastBuild = null;
     if (!quiet) this.onChange();
   }
@@ -158,13 +191,18 @@ export class Net {
     c.on('data', d => {
       const m = d as Msg;
       if (m.t === 'hello') {
-        if (this.players.size >= 8) { c.close(); return; }
+        const pid = String(m.pid ?? '');
+        if (this.members && !this.members.has(pid)) { c.send({ t: 'reject', msg: 'You are not a member of this realm' } as Msg); setTimeout(() => c.close(), 300); return; }
+        if (this.players.size >= this.maxPlayers) { c.send({ t: 'reject', msg: 'This lobby is full' } as Msg); setTimeout(() => c.close(), 300); return; }
         const p: PlayerInfo = { id: c.peer, name: String(m.name).slice(0, 20), color: m.color | 0 };
-        this.players.set(p.id, p); this.conns.set(p.id, c);
+        this.players.set(p.id, p); this.conns.set(p.id, c); this.peerPid.set(p.id, pid);
+        const mem = this.memberData.get(pid); if (mem) c.send({ t: 'restore', d: mem.progress, pos: mem.pos } as Msg);
         c.send({ t: 'welcome', id: p.id, clock: this.getClock(), started: this.state === 'game', players: this.list, world: this.worldLog } as Msg);
         this.broadcast({ t: 'join', p } as Msg, p.id);
         if (this.state === 'game') { const s = this.snapshots(); c.send({ t: 'fs', d: s.f } as Msg); c.send({ t: 'bs', d: s.b } as Msg); }
         this.onChange();
+      } else if (m.t === 'prog') {
+        this.pendingProg?.(c.peer, m.d, m.pos);
       } else if (m.t === 'op') {
         let r: Op; try { r = this.onOp(c.peer, m.op); } catch (e) { r = { ok: false, msg: String(e) }; }
         c.send({ t: 'res', rid: m.rid, r } as Msg);
@@ -195,6 +233,10 @@ export class Net {
       case 'leave': this.players.delete(m.id); this.onLeave(m.id); this.onChange(); break;
       case 'start': this.state = 'game'; this.onStart(m.clock); this.onChange(); break;
       case 'clock': this.onClock(m.clock); break;
+      case 'reject': this.fail(m.msg); break;
+      case 'restore': this.restoreData = { progress: m.d, pos: m.pos }; break;
+      case 'saved': this.onSaved(m.code, this.players.get(this.conns.get('host')?.peer ?? '')?.name ?? 'the host'); break;
+      case 'saveReq': { const r = this.onSaveReq(); this.conns.get('host')?.send({ t: 'prog', d: r.d, pos: r.pos } as Msg); break; }
       case 'w': if (this.logWorld(m.k, m.i, m.d)) this.onWorld(m.k, m.i, m.d); break;
       case 'res': { const cb = this.pendingOps.get(m.rid); this.pendingOps.delete(m.rid); cb?.(m.r); break; }
       case 'fs': this.lastFactory = m.d; if (m.d) this.onFactory(m.d); break;
@@ -214,6 +256,29 @@ export class Net {
     if (this.isHost || !c?.open) { done({ ok: false, msg: 'Not connected to the host' }); return; }
     const rid = this.rid++; this.pendingOps.set(rid, done); c.send({ t: 'op', rid, op } as Msg);
   }
+
+  /** Host: ask every player for their progress, wait a moment, and hand back who answered (by player id). */
+  collectProgress(timeoutMs = 2500): Promise<Map<string, { progress: unknown; pos: number[] }>> {
+    return new Promise(resolve => {
+      const got = new Map<string, { progress: unknown; pos: number[] }>(), want = new Set(this.conns.keys());
+      if (!want.size) { resolve(got); return; }
+      const done = () => { clearTimeout(t); this.pendingProg = null; resolve(got); };
+      const t = setTimeout(done, timeoutMs);
+      this.pendingProg = (peer, d, pos) => { const pid = this.peerPid.get(peer); if (pid) got.set(pid, { progress: d, pos }); want.delete(peer); if (!want.size) done(); };
+      this.broadcast({ t: 'saveReq' });
+    });
+  }
+
+  /** Host: replace the record of what has been used up (a loaded realm starts with its saved world). */
+  seedWorld(events: WorldEvent[]): void { this.worldLog = []; this.worldSeen.clear(); for (const [k, i, d] of events) this.logWorld(k, i, d); }
+
+  /** Host: who is connected right now, by player id. */
+  get connectedPids(): { pid: string; name: string; color: number }[] {
+    return [...this.peerPid.entries()].filter(([id]) => this.players.has(id)).map(([id, pid]) => ({ pid, name: this.players.get(id)!.name, color: this.players.get(id)!.color }));
+  }
+
+  /** Host: tell everyone the realm was saved. */
+  announceSaved(): void { this.broadcast({ t: 'saved', code: this.code, host: this.me.name }); }
 
   broadcastFactory(d: unknown): void { if (this.isHost && this.state === 'game') this.broadcast({ t: 'fs', d }); }
   broadcastBuild(d: unknown): void { if (this.isHost && this.state === 'game') this.broadcast({ t: 'bs', d }); }
