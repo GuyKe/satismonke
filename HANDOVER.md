@@ -224,3 +224,6 @@ The Crowded Jungle now packs ~9000 trees (medium quality) with a minimum spacing
 
 ## Autosave
 The game saves itself every `AUTOSAVE_SECONDS` (5 minutes) of play on the planet (not while paused): solo games write to their slot, and a lobby host with saving on saves the realm. A small "Autosaved" / "Realm autosaved" toast confirms it. Settings -> **Autosave** (EVERY 5 MIN / OFF, stored in `Settings.autosave`). Manual saves and "save & main menu" work as before. Test: `tests/autosave.mjs` (uses the `autosaveIn` debug hook).
+
+## Inventory and tools
+The menu button (Y / Esc) now opens the **inventory** first (`MenuPanel` page `inventory`, on the pause panel): every resource you carry (15 tiles, ores included) and your tools. **Conveyor Link** and **Power Line** are crafted once (bench recipes now show IN BAG afterwards; `Progress.ownsTool`) and then live in the inventory: click the tool, the menu closes, then aim at and click the two things you want joined (B or picking it again puts it away). The **Build Tool** tile appears once the Hub is placed. MENU on the inventory page goes to the pause menu (save, settings...), and the pause menu has an INVENTORY button. Test: `tests/inventory.mjs`.

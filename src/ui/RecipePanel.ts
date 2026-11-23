@@ -72,7 +72,8 @@ export class RecipePanel extends Screen {
     for (let i = 0; i < this.visibleRows; i++) {
       const r = this.recipes[this.page * this.perPage + i];
       const y = TOP + i * ROW_H;
-      const done = !r.repeatable && p.has(r.id), open = r.unlocked(p), can = open && !done && p.canAfford(r.cost);
+      const inBag = (r.id === 'conveyor' || r.id === 'powerline') && p.ownsTool(r.id);
+      const done = (!r.repeatable && p.has(r.id)) || inBag, open = r.unlocked(p), can = open && !done && p.canAfford(r.cost);
       ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fillRect(14, y + 4, W - 28, ROW_H - 8);
       ctx.fillStyle = open ? '#fff' : '#778'; ctx.font = 'bold 28px monospace';
       ctx.fillText(r.name + (r.repeatable && p.count(r.id) ? ` x${p.count(r.id)}` : ''), 26, y + 34);
@@ -85,7 +86,7 @@ export class RecipePanel extends Screen {
         ctx.font = '17px monospace'; ctx.fillStyle = done || ok ? '#6fe39a' : '#ff7a7a'; ctx.fillText(t, x, y + 82);
         x += ctx.measureText(t).width + 18;
       }
-      const label = done ? 'BUILT' : !open ? 'LOCKED' : 'CRAFT';
+      const label = inBag ? 'IN BAG' : done ? 'BUILT' : !open ? 'LOCKED' : 'CRAFT';
       ctx.fillStyle = done ? '#1f3a2a' : !open ? '#2a2a36' : can ? (hov.has(i) ? '#ffb347' : '#2f7a4a') : '#4a2a2a';
       ctx.fillRect(450, y + 16, 160, 60);
       ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 3; ctx.strokeRect(450, y + 16, 160, 60);
