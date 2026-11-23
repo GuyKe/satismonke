@@ -218,3 +218,6 @@ Trees, boulders and ore rocks grow back `RESPAWN_SECONDS` (5 min) of play after 
 
 ## Jungle crowd
 The Crowded Jungle now packs ~9000 trees (medium quality) with a minimum spacing of 2.8 m, so there are only narrow ways between trunks (a flood fill over the free ground still reaches 100% of it); it has 10 open fields plus a 30 m clearing around the landing site (so the Hub fits), and rocks and ores are kept off tree trunks (`treeNear`). Jungle trees take **6 punches** whatever tool you hold (`MapDef.treeHits`); other maps keep 2 (1 with an axe). To keep the triangle count down the jungle uses lower-poly trunks, canopies and pines. Placement uses a spatial grid (the plains and desert come out exactly as before). Old jungle saves from before this change will not line up with the new trees. Test: `tests/jungle.mjs`.
+
+## Button layout check
+`tests/buttons.mjs` puts every machine type into its worst states (tripped, wired, overclockable) and checks that every button on the machine panel sits inside the panel and overlaps no other: a button past the edge can never be clicked. The machine panel now shortens its labels and shrinks its buttons to fit one row. The menu pages were audited the same way (no problems found).

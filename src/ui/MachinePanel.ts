@@ -95,16 +95,22 @@ export class MachinePanel extends Screen {
     if (m.kind !== 'splitter') lines.forEach((l, i) => ctx.fillText(l, 24, y0 + i * 32));
     else { ctx.fillText(lines[0], 24, 126); ctx.fillText(lines[lines.length - 1], 24, y0 + 22); }
 
-    // buttons
-    let x = 24;
-    const add = (label: string, action: MachineAction, w = 180, danger = false) => { this.btns.push({ label, action, x, y: row2, w, h: 58, danger }); x += w + 16; };
-    if (net.tripped) add('RESET BREAKER', 'reset', 250);
-    if (lines0 > 0 && !f.legacyGrid) add('CUT LINES', 'unwire', 170);
-    if (m.kind === 'burner') add('+5 WOOD', 'fuel');
+    // buttons: laid out in one row, shrinking (and shortening the labels) when there are too many to fit
+    const specs: { label: string; short: string; action: MachineAction; w: number; danger: boolean }[] = [];
+    const add = (label: string, action: MachineAction, w = 180, danger = false, short = label) => { specs.push({ label, short, action, w, danger }); };
+    if (net.tripped) add('RESET BREAKER', 'reset', 250, false, 'RESET');
+    if (lines0 > 0 && !f.legacyGrid) add('CUT LINES', 'unwire', 170, false, 'CUT');
+    if (m.kind === 'burner') add('+5 WOOD', 'fuel', 180, false, '+WOOD');
     if (m.kind === 'storage') add('TAKE ALL', 'take');
     if (m.kind === 'sink') add(`TOKENS ${f.tokens}`, 'tokens');
     if (['miner', 'smelter', 'constructor', 'sink'].includes(m.kind) && this.canOverclock() && m.clock < MAX_CLOCK) add('+CORE', 'overclock', 130);
     add('REMOVE', 'remove', 150, true);
+    const avail = W - 48, gap = 14;
+    let total = specs.reduce((n, sp) => n + sp.w, 0) + gap * (specs.length - 1);
+    if (total > avail) { specs.forEach(sp => { sp.label = sp.short; sp.w = Math.max(100, Math.round(sp.w * 0.62)); }); total = specs.reduce((n, sp) => n + sp.w, 0) + gap * (specs.length - 1); }
+    if (total > avail) { const k = (avail - gap * (specs.length - 1)) / (total - gap * (specs.length - 1)); specs.forEach(sp => { sp.w = Math.floor(sp.w * k); }); }
+    let x = 24;
+    for (const sp of specs) { this.btns.push({ label: sp.label, action: sp.action, x, y: row2, w: sp.w, h: 58, danger: sp.danger }); x += sp.w + gap; }
 
     const hov = new Set(this.hovered.values());
     this.btns.forEach((b, i) => {
