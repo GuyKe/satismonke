@@ -3,7 +3,7 @@ export const CONTROLS_LINES = [
   '         (there is no walking or joystick)',
   'GRIP + PUNCH   Break trees, ore, crystals, your pod',
   'TRIGGER  Point at screens and click, or place things',
-  'A  Map          X  Crafting          Y  Pause menu',
+  'A  Map          X  Crafting          Y  Inventory + menu',
   'B  Skip the crash scene (pod) / cancel placing',
   '',
   'Desktop test keys:  M map   X craft   Esc menu',

@@ -8,14 +8,17 @@ import { Look, FUR_PALETTE, SUIT_PALETTE, SUIT_NAMES, HATS, BADGES, stepColor, s
 import { CONTROLS_LINES, HOWTO_LINES, RESOURCE_GUIDE } from './helpText';
 
 const W = 800, H = 500;
-type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby' | 'realms' | 'custom' | 'code' | 'maps';
+type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby' | 'realms' | 'custom' | 'code' | 'maps' | 'inventory';
 
 /** A saved realm, either one you host or one you are a member of. */
 export interface RealmEntry { code: string; kind: 'host' | 'member'; line1: string; line2: string }
 export interface LobbyInfo { map: MapId; allowSaving: boolean; maxPlayers: number; realm: boolean; mic: string; code: string; isHost: boolean; status: 'connecting' | 'lobby' | 'game' | 'error'; error: string; players: { name: string; color: number }[] }
 const GUIDE_PER_PAGE = 4;
 
-interface Btn { label: string; x: number; y: number; w: number; h: number; act: () => void; danger?: boolean; dim?: boolean }
+interface Btn { label: string; x: number; y: number; w: number; h: number; act: () => void; danger?: boolean; dim?: boolean; on?: boolean }
+/** One resource in the inventory, and one tool you can pick up from it. */
+export interface InvTile { label: string; value: number; color: string }
+export interface ToolTile { id: string; name: string; owned: boolean; active: boolean }
 
 export interface MenuHandlers {
   /** Start (mode 'new') or continue (mode 'load') the game in a slot. */
@@ -37,6 +40,10 @@ export interface MenuHandlers {
   getLook(): Look;
   onLook(l: Look): void;
   onToggleMic(): void;
+  /** Everything you carry, and your tools (Conveyor Link, Power Line, Build Tool). */
+  inventory(): InvTile[];
+  tools(): ToolTile[];
+  onTool(id: string): void;
   onToggleSaving(): void;
   onCycleMax(): void;
   realms(): RealmEntry[];
@@ -73,7 +80,7 @@ export class MenuPanel extends Screen {
     this.build();
   }
 
-  open(): void { this.page = this.kind === 'main' ? 'main' : 'pause'; this.hovered.clear(); this.build(); }
+  open(): void { this.page = this.kind === 'main' ? 'main' : 'inventory'; this.hovered.clear(); this.build(); }
   /** The lobby changed (or ended): show the right page. */
   setLobby(l: LobbyInfo | null): void {
     this.lobby = l;
@@ -103,8 +110,17 @@ export class MenuPanel extends Screen {
         });
         this.btns.push({ label: 'ENTER CODE', x: 190, y: 118 + 5 * 56, w: 420, h: 48, act: () => { this.typed = ''; this.go('code'); } });
         break;
+      case 'inventory': {
+        this.btns = this.h.tools().map((t, i) => ({
+          label: t.owned ? (t.active ? `${t.name}: ON` : t.name) : `${t.name}: not crafted`, x: 24 + i * 260, y: 318, w: 252, h: 62, dim: !t.owned, on: t.active,
+          act: () => { if (t.owned) this.h.onTool(t.id); },
+        }));
+        this.btns.push({ label: 'MENU', x: 24, y: 410, w: 240, h: 60, act: () => this.go('pause') }, { label: 'RESUME', x: 536, y: 410, w: 240, h: 60, act: () => this.h.onResume() });
+        break;
+      }
       case 'pause':
         this.btns = col([['RESUME', () => this.h.onResume()], ['SAVE GAME', () => this.h.onSave()], ['SETTINGS', () => this.go('settings')], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['FIND RESOURCES', () => this.go('guide')], ['SAVE & MAIN MENU', () => this.h.onMainMenu()]], 84, 50, 8);
+        this.btns.push({ label: 'INVENTORY', x: 24, y: 30, w: 190, h: 40, act: () => this.go('inventory') });
         if (this.lobby && this.lobby.code) {
           this.btns.push({ label: this.micLabel(this.lobby.mic), x: 640, y: 48, w: 140, h: 36, dim: this.lobby.mic === 'nomic', act: () => this.h.onToggleMic() });
           if (this.lobby.isHost) this.btns.push({ label: this.lobby.allowSaving ? 'SAVE: ON' : 'SAVE: OFF', x: 490, y: 48, w: 140, h: 36, act: () => this.h.onToggleSaving() });
@@ -291,7 +307,7 @@ export class MenuPanel extends Screen {
     ctx.fillStyle = '#080c18'; ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 6; ctx.strokeRect(5, 5, W - 10, H - 10);
     ctx.fillStyle = '#ffb347';
-    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY', realms: 'MY REALMS', custom: 'CUSTOMISE', code: 'ENTER A CODE', maps: 'CHOOSE A MAP' };
+    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY', realms: 'MY REALMS', custom: 'CUSTOMISE', code: 'ENTER A CODE', maps: 'CHOOSE A MAP', inventory: 'INVENTORY' };
     ctx.font = this.page === 'main' ? 'bold 72px monospace' : 'bold 48px monospace';
     ctx.fillText(titles[this.page], W / 2, this.page === 'main' ? 110 : 66);
 
@@ -299,6 +315,17 @@ export class MenuPanel extends Screen {
       ctx.fillStyle = '#9ab'; ctx.font = '20px monospace';
       ctx.fillText('Play the planet with friends. One of you creates a lobby,', W / 2, 108);
       ctx.fillText('the others type its 4-letter code. Everyone starts fresh.', W / 2, 132);
+    }
+    if (this.page === 'inventory') {
+      const tiles = this.h.inventory();
+      tiles.forEach((t, i) => {
+        const x = 24 + (i % 5) * 152, y = 84 + Math.floor(i / 5) * 72;
+        ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, y, 146, 64); ctx.strokeStyle = t.value > 0 ? t.color : '#2a3550'; ctx.lineWidth = 2; ctx.strokeRect(x, y, 146, 64);
+        ctx.textAlign = 'left'; ctx.fillStyle = t.value > 0 ? t.color : '#5a6578'; ctx.font = 'bold 15px monospace'; ctx.fillText(t.label, x + 8, y + 20);
+        ctx.textAlign = 'right'; ctx.fillStyle = t.value > 0 ? '#fff' : '#5a6578'; ctx.font = 'bold 30px monospace'; ctx.fillText(String(t.value), x + 138, y + 54);
+      });
+      ctx.textAlign = 'left'; ctx.fillStyle = '#9ab'; ctx.font = 'bold 18px monospace'; ctx.fillText('TOOLS: click one, then click the two things to join', 24, 306);
+      ctx.textAlign = 'center';
     }
     if (this.page === 'maps') {
       MAP_IDS.forEach((id, i) => {
@@ -406,9 +433,10 @@ export class MenuPanel extends Screen {
     }
     this.btns.forEach((b, i) => {
       const hot = [...this.hovered.values()].includes(i);
-      ctx.fillStyle = b.dim ? '#141a2a' : hot ? '#ffb347' : b.danger ? '#4a1c22' : '#1c2a4a'; ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.fillStyle = b.dim ? '#141a2a' : hot ? '#ffb347' : b.on ? '#2f7a4a' : b.danger ? '#4a1c22' : '#1c2a4a'; ctx.fillRect(b.x, b.y, b.w, b.h);
       ctx.strokeStyle = b.danger ? '#ff6a6a' : '#ffb347'; ctx.lineWidth = 3; ctx.strokeRect(b.x, b.y, b.w, b.h);
       ctx.fillStyle = b.dim ? '#4a5568' : hot ? '#10131f' : '#fff'; ctx.font = `bold ${b.h > 70 ? 36 : b.h < 52 ? 24 : 28}px monospace`;
+      { let fs = b.h > 70 ? 36 : b.h < 52 ? 24 : 28; while (fs > 12 && ctx.measureText(b.label).width > b.w - 14) { fs--; ctx.font = `bold ${fs}px monospace`; } }
       ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 11);
     });
     if (this.status) { ctx.fillStyle = '#7fe3c1'; ctx.font = 'bold 24px monospace'; ctx.fillText(this.status, W / 2, H - 22); }

@@ -197,6 +197,8 @@ export class Progress {
   /** Campfires/lamps made so far (placed or waiting to be placed). */
   propsPlacedOrPending(id: RecipeId): number { return this.count(id); }
   count(id: RecipeId): number { return this.made[id] ?? 0; }
+  /** Tools live in your inventory once crafted (older saves count if you ever used them). */
+  ownsTool(id: 'conveyor' | 'powerline'): boolean { return (this.made[id] ?? 0) > 0 || (id === 'conveyor' && this.links > 0) || (id === 'powerline' && this.wires > 0); }
   recipe(id: string): Recipe { return RECIPES.find(r => r.id === id)!; }
   has(id: string): boolean { return this.crafted.has(id); }
 
@@ -230,9 +232,9 @@ export class Progress {
     if (!this.fueled) return ['Fuel the Burner', 'Aim at it, press trigger: +5 wood'];
     if (this.count('miner') === 0 && this.count('pole') === 0) return ['Build a Power Pole', this.describeMissing(this.recipe('pole').cost) || 'At the bench: machines need power lines'];
     if (this.count('miner') === 0) return ['Build a Miner on ore', this.describeMissing(miner.cost) || 'Place it on iron or copper'];
-    if (this.wires < 2 && this.count('smelter') === 0) return ['Run power lines', 'Power Line: burner to pole, then pole to the Miner'];
+    if (this.wires < 2 && this.count('smelter') === 0) return ['Run power lines', 'Craft a Power Line, pick it in your inventory, then click burner, pole, miner'];
     if (this.count('smelter') === 0) return ['Build a Smelter', this.describeMissing(smelter.cost) || 'At the bench'];
-    if (this.links < 1) return ['Join them with a Conveyor', 'Link: aim at one, trigger, aim at the other'];
+    if (this.links < 1) return ['Join them with a Conveyor', 'Craft it, then pick it in your inventory (menu button)'];
     if (this.count('constructor') === 0) return ['Build a Constructor', this.describeMissing(cons.cost) || 'At the bench'];
     if (this.links < 2) return ['Link Smelter to Constructor', 'Conveyor Link, then aim and trigger'];
     if (this.count('storage') === 0) return ['Build a Storage Box', 'Link the Constructor to it'];

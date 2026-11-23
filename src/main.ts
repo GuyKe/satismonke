@@ -209,10 +209,10 @@ async function boot() {
     if (isMachine(id) && factory.machines.length >= MAX_MACHINES) { sfx.fail(); toast(`Max ${MAX_MACHINES} machines`, headPos()); return; }
     if (placing) { sfx.fail(); return; }
     if (id === 'buildtool') { setBuild(!buildActive); sfx.craft(); toast(buildActive ? 'Build mode: pick a piece, aim and pull the trigger' : 'Build mode off', headPos()); return; }
-    if (id === 'conveyor' || id === 'powerline') { // tools: join two machines with a belt / a power line
-      const kind = id === 'powerline' ? 'power' : 'belt';
-      linkMode = !(linkMode && linkKind === kind); linkKind = kind; linkFrom = null; setPanel(null); sfx.craft();
-      toast(linkMode ? (kind === 'power' ? 'Power line mode: aim at a pole, trigger, then aim at a machine. B stops' : 'Link mode: aim at a machine, trigger. B stops') : 'Link mode off', headPos());
+    if (id === 'conveyor' || id === 'powerline') { // tools: they go into your inventory (menu button), pick them up there
+      if (progress.ownsTool(id)) { sfx.fail(); toast('Already in your inventory (menu button)', headPos()); return; }
+      progress.made[id] = 1; sfx.craft(); chat('craft_' + id, 5);
+      toast(`${id === 'powerline' ? 'Power Line' : 'Conveyor'} added to your inventory: press the menu button`, headPos());
       return;
     }
     progress.spend(r.cost); progress.made[r.id] = progress.count(r.id) + 1;
@@ -524,6 +524,16 @@ async function boot() {
     else { ship.visible = true; player.teleport(SPAWN); story.reset(); chat('capsuleStart', 0); if (!d) saveGame(); }
   };
 
+  /** Pick a tool from the inventory: it stays selected until you press B (or pick it again). */
+  const useTool = (id: string) => {
+    togglePause(false);
+    if (id === 'buildtool') { setBuild(!buildActive); toast(buildActive ? 'Build mode: pick a piece, aim and pull the trigger' : 'Build mode off', headPos()); return; }
+    const kind = id === 'powerline' ? 'power' : 'belt';
+    linkMode = !(linkMode && linkKind === kind); linkKind = kind; linkFrom = null; setPanel(null); sfx.craft();
+    if (linkMode) setBuild(false);
+    toast(linkMode ? (kind === 'power' ? 'Power line: aim at the first thing and pull the trigger, then at the second (one must be a pole). B stops' : 'Conveyor: aim at a machine and pull the trigger, then at the one it feeds. B stops') : 'Tool put away', headPos());
+  };
+
   const togglePause = (open?: boolean) => {
     if (appMode !== 'game') return;
     pauseOpen = open ?? !pauseOpen;
@@ -578,6 +588,19 @@ async function boot() {
     getLook: () => look,
     onLook: l => applyLook(l),
     onToggleMic: () => toggleMic(),
+    inventory: () => {
+      const it = progress.items;
+      const rows: [string, keyof typeof it, string][] = [['WOOD', 'wood', '#e8b27a'], ['STONE', 'stone', '#c0c4d0'], ['STEEL', 'steel', '#8fc3ff'], ['CRYSTAL', 'crystal', '#6fe8ff'], ['COPPER', 'copper', '#e08a3c'],
+        ['IRON', 'iron', '#8fa6c8'], ['GOLD', 'gold', '#ffd23a'], ['PLASMA', 'plasma', '#d27aff'], ['URANIUM', 'uranium', '#7dff5a'], ['PLATE', 'plate', '#e0e6f0'],
+        ['WIRE', 'wire', '#ff9040'], ['TOKEN', 'token', '#ffd45a'], ['CORE', 'core', '#ff7aa0'], ['DRIVE', 'drive', '#7affb0'], ['ARTIFACT', 'artifact', '#c04dff']];
+      return rows.map(([label, k, color]) => ({ label, value: it[k], color }));
+    },
+    tools: () => [
+      { id: 'conveyor', name: 'CONVEYOR', owned: progress.ownsTool('conveyor'), active: linkMode && linkKind === 'belt' },
+      { id: 'powerline', name: 'POWER LINE', owned: progress.ownsTool('powerline'), active: linkMode && linkKind === 'power' },
+      { id: 'buildtool', name: 'BUILD TOOL', owned: progress.hubPlaced, active: buildActive },
+    ],
+    onTool: id => useTool(id),
   };
   const mainPanel = new MenuPanel('main', handlers, settings, 2.0);
   mainPanel.mesh.position.set(0, 1.05, -1.7);
