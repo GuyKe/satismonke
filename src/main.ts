@@ -13,6 +13,7 @@ import { Net, playerId } from './net/Multiplayer';
 import type { RealmSeed } from './net/Multiplayer';
 import { Voice } from './net/Voice';
 import { LoadingScreen } from './ui/LoadingScreen';
+import { Look, loadLook, saveLook } from './game/Cosmetics';
 import { RemotePlayers } from './world/RemotePlayers';
 import { PlayerModel } from './world/PlayerModel';
 import { Health, Gear, damagePerSecond, fallDamage } from './game/Hazards';
@@ -497,7 +498,9 @@ async function boot() {
   };
 
   // ---- Loading screen: shown while a world is being built ----
-  const loading = new LoadingScreen(net.me.color);
+  let look: Look = loadLook(net.me.color);
+  net.me.color = look.fur; net.me.look = { suit: look.suit, hat: look.hat, badge: look.badge };
+  const loading = new LoadingScreen(look);
   const fastLoad = new URLSearchParams(location.search).has('fastload');
   let loadJob: (() => void) | null = null, loadFrames = 0, loadMin = 0;
   /** Show the loading screen, run `job` a few frames later (so the screen is up first), and keep it up for a moment. */
@@ -564,6 +567,8 @@ async function boot() {
     onRealmHost: code => { const r = readRealm(code); if (!r) return; pendingRealm = r; const seed: RealmSeed = { code: r.code, maxPlayers: r.maxPlayers, members: r.members, progressOf: r.progressOf as RealmSeed['progressOf'] }; net.host(0, seed); },
     onRealmJoin: code => net.join(code),
     onRealmRemove: (code, kind) => { if (kind === 'host') deleteRealm(code); else forgetJoined(code); },
+    getLook: () => look,
+    onLook: l => applyLook(l),
     onToggleMic: () => toggleMic(),
   };
   const mainPanel = new MenuPanel('main', handlers, settings, 2.0);
@@ -591,8 +596,21 @@ async function boot() {
   const hoverTarget: (Interactive | null)[] = [null, null];
   hoverTarget[99] = null;
   // You see your own pioneer: body, arms and fists (no head, it is where your eyes are).
-  const selfModel = new PlayerModel(net.me.color, { head: false });
+  let selfModel = new PlayerModel(look.fur, { head: false, suit: look.suit, hat: look.hat, badge: look.badge });
   scene.add(selfModel.group);
+  // a mannequin of your pioneer next to the main menu: it turns, waves and shows your look
+  let preview = new PlayerModel(look.fur, { suit: look.suit, hat: look.hat, badge: look.badge });
+  const previewG = new THREE.Group(); previewG.add(preview.group); previewG.position.set(1.75, 1.45, -1.5); previewG.scale.setScalar(1.15); menuRoom.group.add(previewG);
+  let previewT = 0;
+  const applyLook = (l: Look) => {
+    look = { ...l }; saveLook(look);
+    net.me.color = look.fur; net.me.look = { suit: look.suit, hat: look.hat, badge: look.badge };
+    scene.remove(selfModel.group); disposeObject(selfModel.group);
+    selfModel = new PlayerModel(look.fur, { head: false, suit: look.suit, hat: look.hat, badge: look.badge }); scene.add(selfModel.group);
+    previewG.remove(preview.group); disposeObject(preview.group);
+    preview = new PlayerModel(look.fur, { suit: look.suit, hat: look.hat, badge: look.badge }); previewG.add(preview.group);
+    loading.setLook(look);
+  };
   const buzz = (i: number, strength: number, ms: number) => {
     const gp = inputs[i]?.gamepad as (Gamepad & { hapticActuators?: { pulse(v: number, d: number): void }[] }) | undefined;
     try { gp?.hapticActuators?.[0]?.pulse(strength, ms); } catch { /* no haptics */ }
@@ -1116,7 +1134,14 @@ async function boot() {
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); fwd.y = 0;
     if (fwd.lengthSq() < 1e-4) fwd.set(0, 0, -1);
     fwd.normalize();
-    if (appMode === 'menu') { menuRoom.update(dt); mainPanel.update(dt); }
+    if (appMode === 'menu') {
+      menuRoom.update(dt); mainPanel.update(dt);
+      // the mannequin turns toward you, sways and waves
+      previewT += dt; previewG.visible = true;
+      previewG.rotation.y = Math.PI * 0 + Math.sin(previewT * 0.5) * 0.35 - 0.3;
+      const wv = Math.sin(previewT * 4.5);
+      preview.setPose(new THREE.Vector3(0, 0, 0), Math.PI, 0, Math.sin(previewT * 0.8) * 0.05, new THREE.Vector3(0.3, -0.62, 0.05), new THREE.Vector3(-0.36 - wv * 0.04, 0.12 + wv * 0.05, 0.04), dt);
+    } else previewG.visible = false;
     if (pauseOpen) {
       const target = headW.clone().addScaledVector(fwd, 0.85); target.y = headW.y - 0.05;
       pausePanel.mesh.position.lerp(target, 1 - Math.exp(-8 * dt));

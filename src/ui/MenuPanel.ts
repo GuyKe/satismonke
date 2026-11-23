@@ -3,10 +3,11 @@ import { Screen } from './Screen';
 import { SaveData, SLOTS, listSlots, formatAgo, formatPlaytime } from '../game/Save';
 import type { Settings, Quality } from '../settings';
 import { CODE_CHARS, CODE_LEN } from '../net/Multiplayer';
+import { Look, FUR_PALETTE, SUIT_PALETTE, SUIT_NAMES, HATS, BADGES, stepColor, stepItem, redeem, loadUnlocked } from '../game/Cosmetics';
 import { CONTROLS_LINES, HOWTO_LINES, RESOURCE_GUIDE } from './helpText';
 
 const W = 800, H = 500;
-type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby' | 'realms';
+type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby' | 'realms' | 'custom' | 'code';
 
 /** A saved realm, either one you host or one you are a member of. */
 export interface RealmEntry { code: string; kind: 'host' | 'member'; line1: string; line2: string }
@@ -29,6 +30,9 @@ export interface MenuHandlers {
   onJoin(code: string): void;
   onLeaveLobby(): void;
   onStartLobby(): void;
+  /** Your current look, and a way to change it (the preview and your avatar update). */
+  getLook(): Look;
+  onLook(l: Look): void;
   onToggleMic(): void;
   onToggleSaving(): void;
   onCycleMax(): void;
@@ -48,6 +52,7 @@ export class MenuPanel extends Screen {
   private armedAt = 0;
   private armedRealm = '';
   private realmList: RealmEntry[] = [];
+  private typed = '';
   private status = '';
   private statusT = 0;
   private dirty = true;
@@ -84,7 +89,12 @@ export class MenuPanel extends Screen {
       labels.map(([label, act], i) => ({ label, act, x: 190, y: y0 + i * (bh + gap), w: 420, h: bh }));
     switch (this.page) {
       case 'main':
-        this.btns = col([['PLAY', () => { this.slots = listSlots(); this.go('slots'); }], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['FIND RESOURCES', () => this.go('guide')], ['MULTIPLAYER', () => this.go('multi')], ['SETTINGS', () => this.go('settings')]], 122, 48, 8);
+        this.btns = col([['PLAY', () => { this.slots = listSlots(); this.go('slots'); }], ['MULTIPLAYER', () => this.go('multi')], ['CUSTOMISE', () => this.go('custom')]], 118, 48, 8);
+        const pairs: [[string, Page], [string, Page]][] = [[['CONTROLS', 'controls'], ['HOW TO PLAY', 'howto']], [['FIND RESOURCES', 'guide'], ['SETTINGS', 'settings']]];
+        pairs.forEach(([l, r], i) => {
+          this.btns.push({ label: l[0], x: 190, y: 118 + (3 + i) * 56, w: 206, h: 48, act: () => this.go(l[1]) }, { label: r[0], x: 404, y: 118 + (3 + i) * 56, w: 206, h: 48, act: () => this.go(r[1]) });
+        });
+        this.btns.push({ label: 'ENTER CODE', x: 190, y: 118 + 5 * 56, w: 420, h: 48, act: () => { this.typed = ''; this.go('code'); } });
         break;
       case 'pause':
         this.btns = col([['RESUME', () => this.h.onResume()], ['SAVE GAME', () => this.h.onSave()], ['SETTINGS', () => this.go('settings')], ['CONTROLS', () => this.go('controls')], ['HOW TO PLAY', () => this.go('howto')], ['FIND RESOURCES', () => this.go('guide')], ['SAVE & MAIN MENU', () => this.h.onMainMenu()]], 84, 50, 8);
@@ -121,6 +131,31 @@ export class MenuPanel extends Screen {
           { label: 'DEL', x: 28, y: 410, w: 170, h: 60, danger: true, act: () => { this.code = this.code.slice(0, -1); this.build(); } },
           { label: 'JOIN', x: 314, y: 410, w: 170, h: 60, dim: this.code.length < CODE_LEN, act: () => { if (this.code.length === CODE_LEN) this.h.onJoin(this.code); } },
           { label: 'BACK', x: 602, y: 410, w: 170, h: 60, act: () => this.go('multi') },
+        );
+        break;
+      }
+      case 'custom': {
+        const l = this.h.getLook(), set = (p: Partial<Look>) => () => { this.h.onLook({ ...this.h.getLook(), ...p }); this.build(); };
+        const row = (i: number, dec: () => void, inc: () => void) => {
+          const y = 96 + i * 76;
+          this.btns.push({ label: '<', x: 440, y, w: 70, h: 56, act: dec }, { label: '>', x: 700, y, w: 70, h: 56, act: inc });
+        };
+        this.btns = [];
+        row(0, set({ fur: stepColor(FUR_PALETTE, l.fur, -1) }), set({ fur: stepColor(FUR_PALETTE, l.fur, 1) }));
+        row(1, set({ suit: stepColor(SUIT_PALETTE, l.suit, -1) }), set({ suit: stepColor(SUIT_PALETTE, l.suit, 1) }));
+        row(2, set({ hat: stepItem('hat', HATS, l.hat, -1) }), set({ hat: stepItem('hat', HATS, l.hat, 1) }));
+        row(3, set({ badge: stepItem('badge', BADGES, l.badge, -1) }), set({ badge: stepItem('badge', BADGES, l.badge, 1) }));
+        this.btns.push({ label: 'ENTER CODE', x: 40, y: 410, w: 300, h: 60, act: () => { this.typed = ''; this.go('code'); } }, { label: 'BACK', x: 460, y: 410, w: 300, h: 60, act: () => this.go('main') });
+        break;
+      }
+      case 'code': {
+        this.btns = [];
+        const keys = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'], per = 12;
+        keys.forEach((c, i) => this.btns.push({ label: c, x: 28 + (i % per) * 62, y: 176 + Math.floor(i / per) * 58, w: 56, h: 50, act: () => { if (this.typed.length < 16) this.typed += c; this.build(); } }));
+        this.btns.push(
+          { label: 'DEL', x: 28, y: 364, w: 170, h: 56, danger: true, act: () => { this.typed = this.typed.slice(0, -1); this.build(); } },
+          { label: 'ENTER', x: 314, y: 364, w: 170, h: 56, dim: this.typed.length === 0, act: () => this.submitCode() },
+          { label: 'BACK', x: 602, y: 364, w: 170, h: 56, act: () => this.go('custom') },
         );
         break;
       }
@@ -178,6 +213,14 @@ export class MenuPanel extends Screen {
     }
   }
 
+  private submitCode(): void {
+    if (!this.typed) return;
+    const r = redeem(this.typed);
+    this.flash(r.message);
+    if (r.ok) { this.typed = ''; if (r.equip) this.h.onLook({ ...this.h.getLook(), ...r.equip }); }
+    this.build();
+  }
+
   private micLabel(m: string): string { return m === 'on' ? 'MIC ON' : m === 'muted' ? 'MIC OFF' : m === 'nomic' ? 'NO MIC' : 'MIC...'; }
 
   private idx(uv: THREE.Vector2 | null): number {
@@ -214,7 +257,7 @@ export class MenuPanel extends Screen {
     ctx.fillStyle = '#080c18'; ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 6; ctx.strokeRect(5, 5, W - 10, H - 10);
     ctx.fillStyle = '#ffb347';
-    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY', realms: 'MY REALMS' };
+    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY', realms: 'MY REALMS', custom: 'CUSTOMISE', code: 'ENTER A CODE' };
     ctx.font = this.page === 'main' ? 'bold 72px monospace' : 'bold 48px monospace';
     ctx.fillText(titles[this.page], W / 2, this.page === 'main' ? 110 : 66);
 
@@ -222,6 +265,26 @@ export class MenuPanel extends Screen {
       ctx.fillStyle = '#9ab'; ctx.font = '20px monospace';
       ctx.fillText('Play the planet with friends. One of you creates a lobby,', W / 2, 108);
       ctx.fillText('the others type its 4-letter code. Everyone starts fresh.', W / 2, 132);
+    }
+    if (this.page === 'custom') {
+      const l = this.h.getLook(), u = loadUnlocked();
+      const hat = HATS.find(h => h.id === l.hat)?.name ?? 'No hat', badge = BADGES.find(b => b.id === l.badge)?.name ?? 'No badge';
+      const suitName = SUIT_NAMES[SUIT_PALETTE.indexOf(l.suit)] ?? 'Custom';
+      const rows: [string, string, number | null][] = [['FUR', `${FUR_PALETTE.indexOf(l.fur) + 1 || '-'} / ${FUR_PALETTE.length}`, l.fur], ['SUIT', suitName, l.suit], ['HAT', hat, null], ['BADGE', badge, null]];
+      rows.forEach(([label, val, col], i) => {
+        const y = 96 + i * 76;
+        ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(24, y - 4, 752, 64);
+        ctx.textAlign = 'left'; ctx.fillStyle = '#ffb347'; ctx.font = 'bold 30px monospace'; ctx.fillText(label, 44, y + 38);
+        if (col !== null) { ctx.fillStyle = '#' + col.toString(16).padStart(6, '0'); ctx.fillRect(200, y + 6, 56, 44); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(200, y + 6, 56, 44); }
+        ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.font = 'bold 26px monospace'; ctx.fillText(val, 605, y + 38);
+      });
+      ctx.textAlign = 'center'; ctx.fillStyle = '#7a8aa0'; ctx.font = '17px monospace';
+      ctx.fillText(`Locked items appear here once you enter a code (${[...u].length} unlocked)`, W / 2, 396);
+    }
+    if (this.page === 'code') {
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 44px monospace'; ctx.textAlign = 'center';
+      ctx.fillText(this.typed ? this.typed : '_', W / 2, 126);
+      ctx.fillStyle = '#7a8aa0'; ctx.font = '18px monospace'; ctx.fillText('Type a code with the keys, then ENTER', W / 2, 152);
     }
     if (this.page === 'realms') {
       if (!this.realmList.length) { ctx.fillStyle = '#9ab'; ctx.font = '22px monospace'; ctx.fillText('No realms yet.', W / 2, 190); ctx.fillText('Host a lobby with SAVING: ON, then save from the pause menu.', W / 2, 224); }

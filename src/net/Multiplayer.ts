@@ -6,7 +6,9 @@ export const CODE_LEN = 4;
 const PREFIX = 'satismonke-';
 const SEND_HZ = 12;
 
-export interface PlayerInfo { id: string; name: string; color: number }
+/** How a player looks to others (fur colour is `color`). */
+export interface PlayerLook { suit: number; hat: string; badge: string }
+export interface PlayerInfo { id: string; name: string; color: number; look?: PlayerLook }
 /** head x,y,z + quaternion x,y,z,w, then left hand x,y,z, right hand x,y,z */
 export type Pose = number[];
 /** A request to the host (place a machine, build a wall...) or its answer. */
@@ -16,7 +18,7 @@ export type WorldEvent = [string, number, number[]?];
 export interface RealmSeed { code: string; maxPlayers: number; members: Record<string, { name: string; color: number }>; progressOf: Record<string, { progress: unknown; pos: number[] | null }> }
 
 type Msg =
-  | { t: 'hello'; name: string; color: number; pid: string }
+  | { t: 'hello'; name: string; color: number; pid: string; look?: PlayerLook }
   | { t: 'reject'; msg: string }
   | { t: 'restore'; d: unknown; pos: number[] | null }
   | { t: 'saveReq' }
@@ -162,7 +164,7 @@ export class Net {
       this.myId = id; this.me.id = id;
       const c = peer.connect(PREFIX + code, { reliable: true });
       this.conns.set('host', c);
-      c.on('open', () => c.send({ t: 'hello', name: this.me.name, color: this.me.color, pid: playerId() } as Msg));
+      c.on('open', () => c.send({ t: 'hello', name: this.me.name, color: this.me.color, pid: playerId(), look: this.me.look } as Msg));
       c.on('data', d => this.clientMsg(d as Msg));
       c.on('close', () => { if (this.state !== 'off' && this.state !== 'error') this.fail('The host closed the lobby'); });
     });
@@ -194,7 +196,7 @@ export class Net {
         const pid = String(m.pid ?? '');
         if (this.members && !this.members.has(pid)) { c.send({ t: 'reject', msg: 'You are not a member of this realm' } as Msg); setTimeout(() => c.close(), 300); return; }
         if (this.players.size >= this.maxPlayers) { c.send({ t: 'reject', msg: 'This lobby is full' } as Msg); setTimeout(() => c.close(), 300); return; }
-        const p: PlayerInfo = { id: c.peer, name: String(m.name).slice(0, 20), color: m.color | 0 };
+        const lk = m.look, p: PlayerInfo = { id: c.peer, name: String(m.name).slice(0, 20), color: m.color | 0, look: lk ? { suit: lk.suit | 0, hat: String(lk.hat).slice(0, 12), badge: String(lk.badge).slice(0, 12) } : undefined };
         this.players.set(p.id, p); this.conns.set(p.id, c); this.peerPid.set(p.id, pid);
         const mem = this.memberData.get(pid); if (mem) c.send({ t: 'restore', d: mem.progress, pos: mem.pos } as Msg);
         c.send({ t: 'welcome', id: p.id, clock: this.getClock(), started: this.state === 'game', players: this.list, world: this.worldLog } as Msg);
