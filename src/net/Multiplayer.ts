@@ -1,5 +1,6 @@
 import Peer, { DataConnection, PeerOptions } from 'peerjs';
 import type { MapId } from '../world/MapDef';
+import type { Clip } from '../media/Clip';
 
 /** Unambiguous characters for lobby codes (no 0/O/1/I). */
 export const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -25,6 +26,9 @@ type Msg =
   | { t: 'saveReq' }
   | { t: 'prog'; d: unknown; pos: number[] }
   | { t: 'saved'; code: string; host: string }
+  | { t: 'clip'; c: Clip }
+  | { t: 'clips'; cs: Clip[] }
+  | { t: 'music'; id: string | null }
   | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[]; world: WorldEvent[]; map?: MapId }
   | { t: 'join'; p: PlayerInfo }
   | { t: 'leave'; id: string }
@@ -106,6 +110,11 @@ export class Net {
   onSaveReq: () => { d: unknown; pos: number[] } = () => ({ d: null, pos: [0, 0, 0] });
   private peerPid = new Map<string, string>();     // host: peer id -> player id
   private pendingProg: ((peer: string, d: unknown, pos: number[]) => void) | null = null;
+  /** Videos people in this lobby have published from the media computer (the host keeps the latest few for late joiners). */
+  lobbyClips: Clip[] = [];
+  onClip: (c: Clip) => void = () => {};
+  /** Someone started or stopped the media computer's music. */
+  onMusic: (id: string | null) => void = () => {};
   lastFactory: unknown = null;
   lastBuild: unknown = null;
   /** Host: current snapshots for someone who just joined. */
@@ -179,7 +188,7 @@ export class Net {
 
   leave(quiet = false): void {
     this.peer?.destroy(); this.peer = null; this.conns.clear(); this.players.clear();
-    this.members = null; this.allowSaving = false; this.maxPlayers = 8; this.map = 'plains'; this.memberData.clear(); this.restoreData = null; this.peerPid.clear();
+    this.members = null; this.allowSaving = false; this.maxPlayers = 8; this.map = 'plains'; this.lobbyClips = []; this.memberData.clear(); this.restoreData = null; this.peerPid.clear();
     this.state = 'off'; this.isHost = false; this.code = ''; this.worldLog = []; this.worldSeen.clear(); this.pendingOps.clear(); this.lastFactory = this.lastBuild = null;
     if (!quiet) this.onChange();
   }
@@ -202,10 +211,15 @@ export class Net {
         const lk = m.look, p: PlayerInfo = { id: c.peer, name: String(m.name).slice(0, 20), color: m.color | 0, look: lk ? { suit: lk.suit | 0, hat: String(lk.hat).slice(0, 12), badge: String(lk.badge).slice(0, 12) } : undefined };
         this.players.set(p.id, p); this.conns.set(p.id, c); this.peerPid.set(p.id, pid);
         const mem = this.memberData.get(pid); if (mem) c.send({ t: 'restore', d: mem.progress, pos: mem.pos } as Msg);
+        if (this.lobbyClips.length) c.send({ t: 'clips', cs: this.lobbyClips.slice(-3) } as Msg);
         c.send({ t: 'welcome', id: p.id, clock: this.getClock(), started: this.state === 'game', players: this.list, world: this.worldLog, map: this.map } as Msg);
         this.broadcast({ t: 'join', p } as Msg, p.id);
         if (this.state === 'game') { const s = this.snapshots(); c.send({ t: 'fs', d: s.f } as Msg); c.send({ t: 'bs', d: s.b } as Msg); }
         this.onChange();
+      } else if (m.t === 'clip') {
+        if (this.keepClip(m.c)) { this.onClip(m.c); this.broadcast(m, c.peer); }
+      } else if (m.t === 'music') {
+        this.onMusic(m.id); this.broadcast(m, c.peer);
       } else if (m.t === 'prog') {
         this.pendingProg?.(c.peer, m.d, m.pos);
       } else if (m.t === 'op') {
@@ -240,6 +254,9 @@ export class Net {
       case 'start': this.map = m.map ?? this.map; for (const [k, i, d] of m.world ?? []) this.logWorld(k, i, d); this.state = 'game'; this.onStart(m.clock); this.onChange(); break;
       case 'clock': this.onClock(m.clock); break;
       case 'reject': this.fail(m.msg); break;
+      case 'clip': if (this.keepClip(m.c)) this.onClip(m.c); break;
+      case 'clips': for (const c of m.cs) if (this.keepClip(c)) this.onClip(c); break;
+      case 'music': this.onMusic(m.id); break;
       case 'restore': this.restoreData = { progress: m.d, pos: m.pos }; break;
       case 'saved': this.onSaved(m.code, this.players.get(this.conns.get('host')?.peer ?? '')?.name ?? 'the host'); break;
       case 'saveReq': { const r = this.onSaveReq(); this.conns.get('host')?.send({ t: 'prog', d: r.d, pos: r.pos } as Msg); break; }
@@ -254,6 +271,30 @@ export class Net {
   private logWorld(k: string, i: number, d?: number[]): boolean {
     const key = k + ':' + i + (d ? ':' + d.join(',') : ''); if (this.worldSeen.has(key)) return false;
     this.worldSeen.add(key); this.worldLog.push(d ? [k, i, d] : [k, i]); return true;
+  }
+
+  /** Remember a published clip (if it looks like one): returns false for duplicates and junk. */
+  private keepClip(c: Clip): boolean {
+    if (!c || typeof c.id !== 'string' || !Array.isArray(c.frames) || c.frames.length < 2 || c.frames.length > 130 || this.lobbyClips.some(x => x.id === c.id)) return false;
+    if (!c.frames.every(f => typeof f === 'string' && f.length < 60000 && f.startsWith('data:image/jpeg;base64,'))) return false;
+    this.lobbyClips.push({ ...c, source: 'lobby', title: String(c.title).slice(0, 40), author: String(c.author).slice(0, 24) });
+    if (this.lobbyClips.length > 6) this.lobbyClips.shift();
+    return true;
+  }
+
+  /** Share a clip with everyone in the lobby. */
+  sendClip(c: Clip): void {
+    if (this.state !== 'lobby' && this.state !== 'game') return;
+    if (!this.keepClip(c)) return;
+    const m: Msg = { t: 'clip', c: { ...c, source: undefined } };
+    if (this.isHost) this.broadcast(m); else if (this.conns.get('host')?.open) this.conns.get('host')!.send(m);
+  }
+
+  /** Start (or stop, with null) the media computer's music for the whole lobby. */
+  sendMusic(id: string | null): void {
+    if (this.state !== 'lobby' && this.state !== 'game') return;
+    const m: Msg = { t: 'music', id };
+    if (this.isHost) this.broadcast(m); else if (this.conns.get('host')?.open) this.conns.get('host')!.send(m);
   }
 
   /** A used-up tree or rock grew back: forget it was used up (so it can be used up again and late joiners do not remove it). */

@@ -70,6 +70,11 @@ export interface HubMesh {
   computerScreenAt: THREE.Vector3;
   upgradeScreenAt: THREE.Vector3;
   researchScreenAt: THREE.Vector3;
+  /** The media computer (music and videos), the recording camera's control panel, and where the camera's lens is. */
+  mediaScreenAt: THREE.Vector3;
+  camPanelAt: THREE.Vector3;
+  camEye: THREE.Vector3;
+  camLook: THREE.Vector3;
 }
 
 /** Build the steel Hub: low house, roof, two long walls, open stair ends, bench and computer desk. */
@@ -111,10 +116,27 @@ export function buildHubMesh(ghost = false): HubMesh {
   const kb = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.03, 0.2), dark); kb.position.set(2.0, FLOOR + 0.77, -1.7); group.add(kb);
   const pc = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.6, 0.08), dark); pc.position.set(2.0, FLOOR + 1.1, -2.22); group.add(pc); // monitor housing
 
+  // the media computer next to it: a desk, monitor and keyboard (music and videos)
+  const desk2 = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.74, 0.55), dark); desk2.position.set(0.0, FLOOR + 0.37, -2.1); group.add(desk2);
+  const pc2 = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.6, 0.08), dark); pc2.position.set(0.0, FLOOR + 1.1, -2.22); group.add(pc2);
+  const kb2 = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.03, 0.2), dark); kb2.position.set(0.0, FLOOR + 0.77, -1.9); group.add(kb2);
+  const note = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.012, 6, 12), new THREE.MeshBasicMaterial({ color: 0xff7ad8, toneMapped: false })); note.position.set(0.0, FLOOR + 1.5, -2.2); group.add(note);   // a little ring above it: this one plays music
+  // the camera: a tripod with a camera body, a lens and a red recording light, facing into the room
+  const camEye = new THREE.Vector3(0.6, FLOOR + 1.3, -0.55), camLook = new THREE.Vector3(-0.3, FLOOR + 1.1, 1.6);
+  const tri = new THREE.Group(); tri.position.set(camEye.x, FLOOR, camEye.z);
+  for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2 + 0.4, leg = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.018, 1.25, 6), dark); leg.position.set(Math.cos(a) * 0.17, 0.6, Math.sin(a) * 0.17); leg.rotation.set(Math.sin(a) * 0.2, 0, -Math.cos(a) * 0.2); tri.add(leg); }
+  const body = new THREE.Group(); body.position.set(0, camEye.y - FLOOR, 0);
+  body.add(new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.3), dark));
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.14, 12).rotateX(Math.PI / 2), toolMat); lens.position.set(0, 0, 0.2); body.add(lens);
+  const glass2 = new THREE.Mesh(new THREE.CircleGeometry(0.05, 12), new THREE.MeshBasicMaterial({ color: 0x2a4a8a, toneMapped: false })); glass2.position.set(0, 0, 0.275); body.add(glass2);
+  const recLight = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), new THREE.MeshBasicMaterial({ color: 0xff2020, toneMapped: false })); recLight.position.set(-0.07, 0.1, 0.05); body.add(recLight);
+  tri.updateMatrixWorld(true); body.lookAt(camLook); tri.add(body); group.add(tri);
+  const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.03, 1.0, 6), dark); stand.position.set(1.0, FLOOR + 0.5, -2.0); group.add(stand);   // post for the camera's control panel
+
   if (ghost) { // translucent preview: one shared material, tinted by the caller
     const gm = new THREE.MeshBasicMaterial({ color: 0x55ff88, transparent: true, opacity: 0.4, depthWrite: false });
     group.traverse(o => { if ((o as THREE.Mesh).isMesh) (o as THREE.Mesh).material = gm; });
     group.userData.ghostMaterial = gm;
   }
-  return { group, benchScreenAt: new THREE.Vector3(-1.9, FLOOR + 1.62, -2.43), computerScreenAt: new THREE.Vector3(2.0, FLOOR + 1.1, -2.15), upgradeScreenAt: new THREE.Vector3(-1.9, FLOOR + 1.5, 2.43), researchScreenAt: new THREE.Vector3(1.9, FLOOR + 1.5, 2.43) };
+  return { group, benchScreenAt: new THREE.Vector3(-1.9, FLOOR + 1.62, -2.43), computerScreenAt: new THREE.Vector3(2.0, FLOOR + 1.1, -2.15), upgradeScreenAt: new THREE.Vector3(-1.9, FLOOR + 1.5, 2.43), researchScreenAt: new THREE.Vector3(1.9, FLOOR + 1.5, 2.43), mediaScreenAt: new THREE.Vector3(0.0, FLOOR + 1.1, -2.15), camPanelAt: new THREE.Vector3(1.0, FLOOR + 1.15, -1.95), camEye, camLook };
 }
