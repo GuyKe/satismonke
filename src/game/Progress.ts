@@ -3,7 +3,7 @@ export const ORES: Ore[] = ['copper', 'iron', 'gold', 'plasma', 'uranium'];
 export type Res = 'wood' | 'stone' | 'steel' | 'crystal' | Ore | 'plate' | 'wire' | 'token' | 'core' | 'drive' | 'artifact';
 export type Cost = Partial<Record<Res, number>>;
 export type RecipeId = 'hub' | 'campfire' | 'pickaxe' | 'axe' | 'lantern' | 'gloves' | 'sticky' | 'floatcore' | 'crystalgloves' | 'lamp' | 'ironpick' | 'copperlantern' | 'scanner' | 'plasmacore'
-  | 'burner' | 'miner' | 'smelter' | 'constructor' | 'storage' | 'solar' | 'conveyor'
+  | 'steelbar' | 'pole' | 'powerline' | 'burner' | 'miner' | 'smelter' | 'constructor' | 'storage' | 'solar' | 'conveyor'
   | 'buildtool' | 'splitter' | 'sink' | 'beacon' | 'solarroof' | 'lab' | 'overclockst' | 'altplate' | 'altwire' | 'altsmelt' | 'efficiency'
   | 'gasmask' | 'hazmat' | 'bladerunners' | 'reactor';
 
@@ -15,6 +15,8 @@ export interface Recipe {
   cost: Cost;
   /** Placeable things can be made again and again. */
   repeatable?: boolean;
+  /** Things handed over when crafted (instead of placing something). */
+  gives?: Cost;
   /** Locked recipes show `lockedHint` instead of a Craft button. */
   unlocked(p: Progress): boolean;
   lockedHint(p: Progress): string;
@@ -38,6 +40,8 @@ export const RECIPES: Recipe[] = [
     cost: { wood: 5, stone: 3 }, unlocked: always, lockedHint: noHint },
   { id: 'pickaxe', name: 'Stone Pickaxe', desc: 'Boulders and crystals break in 1 hit, +1 stone', where: 'x',
     cost: { wood: 3, stone: 4 }, unlocked: always, lockedHint: noHint },
+  { id: 'steelbar', name: 'Forge Steel', desc: 'Smelt iron and stone into 2 steel: no crashed pod needed', where: 'x', repeatable: true,
+    cost: { iron: 6, stone: 3 }, gives: { steel: 2 }, unlocked: p => p.mined.iron >= 2, lockedHint: p => `Mine 2 iron (${Math.min(p.mined.iron, 2)}/2)` },
   { id: 'buildtool', name: 'Build Tool', desc: 'Foundations, walls and catwalks', where: 'x',
     cost: {}, unlocked: p => p.hubPlaced, lockedHint: () => 'Place the Hub first' },
   // ---- Hub bench: unlock these as you explore ----
@@ -70,6 +74,10 @@ export const RECIPES: Recipe[] = [
   // ---- factory machines (all placeable and repeatable) ----
   { id: 'burner', name: 'Biomass Burner', desc: 'Burns wood into 1 MW of power', where: 'bench', repeatable: true,
     cost: { wood: 8, iron: 4 }, unlocked: always, lockedHint: noHint },
+  { id: 'pole', name: 'Power Pole', desc: 'Carries power: wire it to a burner and to your machines', where: 'bench', repeatable: true,
+    cost: { wood: 4, iron: 3 }, unlocked: p => p.made.burner! > 0, lockedHint: () => 'Build a Biomass Burner first' },
+  { id: 'powerline', name: 'Power Line', desc: 'Joins a pole to a machine, burner or the Hub (1 copper per 6 m). B to stop', where: 'bench', repeatable: true,
+    cost: {}, unlocked: p => p.made.pole! > 0, lockedHint: () => 'Build a Power Pole first' },
   { id: 'miner', name: 'Miner', desc: 'Sits on iron or copper ore: 30 ore/min', where: 'bench', repeatable: true,
     cost: { iron: 10, stone: 8, copper: 3 }, unlocked: p => p.made.burner! > 0, lockedHint: () => 'Build a Biomass Burner first' },
   { id: 'smelter', name: 'Smelter', desc: 'Ore into ingots: 30/min', where: 'bench', repeatable: true,
@@ -119,7 +127,7 @@ const label: Record<Res, string> = { uranium: 'uranium', token: 'token', core: '
 
 export interface ProgressData {
   items: Record<Res, number>; mined: Record<Ore, number>; totalWood: number; totalCrystal: number; treesFelled: number; bouldersBroken: number;
-  made: Partial<Record<RecipeId, number>>; links?: number; fueled?: boolean; platesCollected?: number; lootOpened?: number; piecesBuilt?: number; colors?: number[]; podHits: number; podDestroyed: boolean; hubPlaced: boolean; benchOpened: boolean; gamePlayed: boolean; crafted: string[];
+  made: Partial<Record<RecipeId, number>>; links?: number; wires?: number; fueled?: boolean; platesCollected?: number; lootOpened?: number; piecesBuilt?: number; colors?: number[]; podHits: number; podDestroyed: boolean; hubPlaced: boolean; benchOpened: boolean; gamePlayed: boolean; crafted: string[];
 }
 
 /** Inventory, unlock counters and the objective text. In-memory only (not saved yet). */
@@ -127,6 +135,8 @@ export class Progress {
   items: Record<Res, number> = { uranium: 0, token: 0, core: 0, drive: 0, artifact: 0, wood: 0, stone: 0, steel: 0, crystal: 0, copper: 0, iron: 0, gold: 0, plasma: 0, plate: 0, wire: 0 };
   /** Factory progress */
   links = 0;
+  /** Power lines you have strung (for the objectives). */
+  wires = 0;
   fueled = false;
   platesCollected = 0;
   lootOpened = 0;
@@ -151,13 +161,13 @@ export class Progress {
   /** Back to a fresh game (keeps the same object so panels holding it stay valid). */
   reset(): void {
     const f = new Progress();
-    Object.assign(this, { items: f.items, mined: f.mined, links: 0, fueled: false, platesCollected: 0, lootOpened: 0, piecesBuilt: 0, colors: [], totalWood: 0, totalCrystal: 0, treesFelled: 0, bouldersBroken: 0, made: {}, podHits: 0, podDestroyed: false, hubPlaced: false, benchOpened: false, gamePlayed: false, crafted: new Set<string>() });
+    Object.assign(this, { items: f.items, mined: f.mined, links: 0, wires: 0, fueled: false, platesCollected: 0, lootOpened: 0, piecesBuilt: 0, colors: [], totalWood: 0, totalCrystal: 0, treesFelled: 0, bouldersBroken: 0, made: {}, podHits: 0, podDestroyed: false, hubPlaced: false, benchOpened: false, gamePlayed: false, crafted: new Set<string>() });
   }
 
   toJSON(): ProgressData {
     return { items: { ...this.items }, mined: { ...this.mined }, totalWood: this.totalWood, totalCrystal: this.totalCrystal, treesFelled: this.treesFelled,
       bouldersBroken: this.bouldersBroken, made: { ...this.made }, podHits: this.podHits, podDestroyed: this.podDestroyed, hubPlaced: this.hubPlaced,
-      benchOpened: this.benchOpened, gamePlayed: this.gamePlayed, crafted: [...this.crafted], links: this.links, fueled: this.fueled, platesCollected: this.platesCollected, lootOpened: this.lootOpened, piecesBuilt: this.piecesBuilt, colors: [...this.colors] };
+      benchOpened: this.benchOpened, gamePlayed: this.gamePlayed, crafted: [...this.crafted], links: this.links, wires: this.wires, fueled: this.fueled, platesCollected: this.platesCollected, lootOpened: this.lootOpened, piecesBuilt: this.piecesBuilt, colors: [...this.colors] };
   }
 
   load(d: ProgressData): void {
@@ -166,7 +176,7 @@ export class Progress {
     this.totalWood = d.totalWood; this.totalCrystal = d.totalCrystal; this.treesFelled = d.treesFelled; this.bouldersBroken = d.bouldersBroken;
     this.podHits = d.podHits; this.podDestroyed = d.podDestroyed; this.hubPlaced = d.hubPlaced; this.benchOpened = d.benchOpened; this.gamePlayed = d.gamePlayed;
     this.crafted = new Set(d.crafted);
-    this.links = d.links ?? 0; this.fueled = d.fueled ?? false; this.platesCollected = d.platesCollected ?? 0;
+    this.links = d.links ?? 0; this.wires = d.wires ?? 0; this.fueled = d.fueled ?? false; this.platesCollected = d.platesCollected ?? 0;
     this.lootOpened = d.lootOpened ?? 0; this.piecesBuilt = d.piecesBuilt ?? 0; this.colors = d.colors ?? [];
   }
 
@@ -218,7 +228,9 @@ export class Progress {
     const burner = this.recipe('burner'), miner = this.recipe('miner'), smelter = this.recipe('smelter'), cons = this.recipe('constructor');
     if (this.count('burner') === 0) return ['Build a Biomass Burner', this.describeMissing(burner.cost) || 'At the bench'];
     if (!this.fueled) return ['Fuel the Burner', 'Aim at it, press trigger: +5 wood'];
+    if (this.count('miner') === 0 && this.count('pole') === 0) return ['Build a Power Pole', this.describeMissing(this.recipe('pole').cost) || 'At the bench: machines need power lines'];
     if (this.count('miner') === 0) return ['Build a Miner on ore', this.describeMissing(miner.cost) || 'Place it on iron or copper'];
+    if (this.wires < 2 && this.count('smelter') === 0) return ['Run power lines', 'Power Line: burner to pole, then pole to the Miner'];
     if (this.count('smelter') === 0) return ['Build a Smelter', this.describeMissing(smelter.cost) || 'At the bench'];
     if (this.links < 1) return ['Join them with a Conveyor', 'Link: aim at one, trigger, aim at the other'];
     if (this.count('constructor') === 0) return ['Build a Constructor', this.describeMissing(cons.cost) || 'At the bench'];

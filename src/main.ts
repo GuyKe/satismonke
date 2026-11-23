@@ -15,7 +15,7 @@ import { RemotePlayers } from './world/RemotePlayers';
 import { PlayerModel } from './world/PlayerModel';
 import { Health, Gear, damagePerSecond, fallDamage } from './game/Hazards';
 import { toWorld } from './world/Hub';
-import { Factory, MachineKind, ITEM_NAME, FactoryState } from './game/Factory';
+import { Factory, MachineKind, ITEM_NAME, FactoryState, Wire, HUB_NODE, HUB_PLUG_RANGE, WIRE_RANGE } from './game/Factory';
 import { FactoryView, buildMachineMesh } from './world/FactoryView';
 import { MachinePanel, MachineAction } from './ui/MachinePanel';
 import { MenuRoom, Slide } from './world/MenuRoom';
@@ -142,7 +142,7 @@ async function boot() {
   };
 
   // Hub: ghost while placing, bench + computer once built
-  const MACHINE_KINDS: MachineKind[] = ['miner', 'smelter', 'constructor', 'storage', 'burner', 'solar', 'splitter', 'sink'];
+  const MACHINE_KINDS: MachineKind[] = ['miner', 'smelter', 'constructor', 'storage', 'burner', 'solar', 'splitter', 'sink', 'pole'];
   const isMachine = (k: string | null): k is MachineKind => !!k && (MACHINE_KINDS as string[]).includes(k);
   const factory = new Factory();
   // Created here (not next to machineAction) because resetGame() uses it during boot; the action is late-bound.
@@ -150,6 +150,7 @@ async function boot() {
   machinePanel.mesh.visible = false; scene.add(machinePanel.mesh);
   let factoryView: FactoryView | null = null;
   let lastPhase = 'day', knownSites = 0, hubSeen = false, idleT = 120;
+  let linkKind: 'belt' | 'power' = 'belt';
   let linkMode = false, linkFrom: number | null = null, wasTripped = false;
   let hoveredMachine: number | null = null, selectedMachine: number | null = null, selectHold = 0;
   let placing: 'hub' | PropKind | MachineKind | null = null;
@@ -202,14 +203,16 @@ async function boot() {
     if (isMachine(id) && factory.machines.length >= MAX_MACHINES) { sfx.fail(); toast(`Max ${MAX_MACHINES} machines`, headPos()); return; }
     if (placing) { sfx.fail(); return; }
     if (id === 'buildtool') { setBuild(!buildActive); sfx.craft(); toast(buildActive ? 'Build mode: pick a piece, aim and pull the trigger' : 'Build mode off', headPos()); return; }
-    if (id === 'conveyor') { // a tool: join two machines
-      linkMode = !linkMode; linkFrom = null; setPanel(null); sfx.craft();
-      toast(linkMode ? 'Link mode: aim at a machine, trigger. B stops' : 'Link mode off', headPos());
+    if (id === 'conveyor' || id === 'powerline') { // tools: join two machines with a belt / a power line
+      const kind = id === 'powerline' ? 'power' : 'belt';
+      linkMode = !(linkMode && linkKind === kind); linkKind = kind; linkFrom = null; setPanel(null); sfx.craft();
+      toast(linkMode ? (kind === 'power' ? 'Power line mode: aim at a pole, trigger, then aim at a machine. B stops' : 'Link mode: aim at a machine, trigger. B stops') : 'Link mode off', headPos());
       return;
     }
     progress.spend(r.cost); progress.made[r.id] = progress.count(r.id) + 1;
     if (!r.repeatable) progress.crafted.add(id);
     sfx.craft();
+    if (r.gives) { for (const k of Object.keys(r.gives) as (keyof typeof r.gives)[]) progress.items[k] += r.gives[k] ?? 0; sfx.pickup(); toast(`+${Object.entries(r.gives).map(([k, n]) => `${n} ${k}`).join(', ')}`, headPos()); }
     if (id === 'hub' || id === 'campfire' || id === 'lamp' || isMachine(id)) startPlacing(id);
     chat('craft_' + id, 5);
     if (id === 'lab') say('lab');
@@ -289,6 +292,19 @@ async function boot() {
       const a = factory.get(l.from), b = factory.get(l.to);
       if (a && b) factoryView!.addLink(l, new THREE.Vector3(a.x, a.y, a.z), new THREE.Vector3(b.x, b.y, b.z));
     }
+    for (const w of factory.wires) addWireView(w);
+  };
+  /** Where a power line meets a node: a machine's plug point, or the Hub's. */
+  const plugPoint = (id: number): THREE.Vector3 | null => {
+    if (id === HUB_NODE) { const h = planet?.hub?.pose; return h ? new THREE.Vector3(h.x, h.y + 3.3, h.z) : null; }
+    const m = factory.get(id); return m ? FactoryView.plug(m.kind, m.x, m.y, m.z) : null;
+  };
+  const addWireView = (w: Wire) => { const a = plugPoint(w.a), b = plugPoint(w.b); if (a && b) factoryView?.addWire(w, a, b); };
+  /** A pole built next to the Hub plugs into it by itself. */
+  const plugToHub = (mc: { id: number; kind: string; x: number; z: number }) => {
+    const h = planet?.hub?.pose;
+    if (mc.kind !== 'pole' || !h || Math.hypot(h.x - mc.x, h.z - mc.z) > HUB_PLUG_RANGE) return;
+    const w = factory.wire(mc.id, HUB_NODE); if (typeof w !== 'string') addWireView(w);
   };
 
   /** Land on the planet: a fresh landing (d = null) or a loaded save. */
@@ -396,6 +412,7 @@ async function boot() {
     if (!planet || !factoryView || net.isHost) return;
     const diff = factory.applyState(d as FactoryState), at = (id: number) => { const m = factory.get(id); return m ? new THREE.Vector3(m.x, m.y, m.z) : null; };
     for (const l of diff.removedL) factoryView.removeLink(l.id);
+    for (const w of diff.removedW) factoryView.removeWire(w.id);
     for (const m of diff.removedM) {
       if (m.ore) planet.setOreOccupied(m.ore.index, false);
       factoryView.removeMachine(m.id); planet.removeMachineCollider(m.id);
@@ -403,6 +420,7 @@ async function boot() {
     }
     for (const m of diff.addedM) { factoryView.addMachine(m); planet.addMachineCollider(m.id, m.x, m.y, m.z); if (m.ore) planet.setOreOccupied(m.ore.index, true); }
     for (const l of diff.addedL) { const a = at(l.from), b = at(l.to); if (a && b) factoryView.addLink(l, a, b); }
+    for (const w of diff.addedW) addWireView(w);
   };
   net.onOp = (from, op) => hostOp(from, op);
   net.onFactory = applyFactoryState;
@@ -608,7 +626,27 @@ async function boot() {
   };
 
   /** Conveyor Link tool: first click picks the source, second the target. */
+  const handlePowerLine = (id: number) => {
+    const b = factory.get(id); if (!b) return;
+    if (linkFrom === null) { linkFrom = id; sfx.pickup(); toast('Now aim at the other end (one end must be a Power Pole)', headPos()); return; }
+    const a0 = factory.get(linkFrom); linkFrom = null;
+    if (!a0) return;
+    if (a0.kind !== 'pole' && b.kind !== 'pole') { sfx.fail(); toast('Power lines go through a Power Pole', headPos()); return; }
+    const pa = FactoryView.plug(a0.kind, a0.x, a0.y, a0.z), pb = FactoryView.plug(b.kind, b.x, b.y, b.z), len = pa.distanceTo(pb), cost = Math.max(1, Math.ceil(len / 6));
+    if (len > WIRE_RANGE) { sfx.fail(); toast(`Too far: ${WIRE_RANGE} m at most (add another pole)`, headPos()); return; }
+    if (progress.items.copper < cost) { sfx.fail(); toast(`A ${Math.round(len)} m line needs ${cost} copper`, headPos()); return; }
+    if (net.state === 'game' && !net.isHost) {
+      progress.items.copper -= cost; progress.wires++;
+      net.sendOp({ k: 'wire', a: a0.id, b: id }, r => { if (r.ok === false) { progress.items.copper += cost; progress.wires--; sfx.fail(); toast(String(r.msg ?? 'Could not connect them'), headPos()); } });
+      sfx.craft(); toast(`Power line (${Math.round(len)} m, ${cost} copper)`, headPos()); return;
+    }
+    const res = factory.wire(a0.id, id);
+    if (typeof res === 'string') { sfx.fail(); toast(res, headPos()); return; }
+    progress.items.copper -= cost; progress.wires++;
+    addWireView(res); markFactory(); sfx.craft(); chat('wired', 20); toast(`Power line (${Math.round(len)} m, ${cost} copper)`, headPos());
+  };
   const handleLink = (id: number) => {
+    if (linkKind === 'power') { handlePowerLine(id); return; }
     const a0 = linkFrom === null ? null : factory.get(linkFrom), b = factory.get(id);
     if (!b) return;
     if (!a0) {
@@ -636,11 +674,13 @@ async function boot() {
     const mc = factory.get(id); if (!mc || !planet) return;
     if (mc.ore) planet.setOreOccupied(mc.ore.index, false);
     for (const lid of factory.removeMachine(id)) factoryView!.removeLink(lid);
+    for (const wid of factory.removedWires) factoryView!.removeWire(wid);
     factoryView!.removeMachine(id); planet.removeMachineCollider(id);
     if (linkFrom === id) linkFrom = null;
     if (selectedMachine === id) { selectedMachine = null; machinePanel.show(null); }
     markFactory();
   };
+  const cutLines = (id: number) => { for (const w of factory.wires.filter(w => w.a === id || w.b === id)) { factory.removeWire(w.id); factoryView?.removeWire(w.id); } markFactory(); };
   const giveItems = (got: Partial<Record<string, number>>, at: THREE.Vector3) => {
     const parts: string[] = [];
     const into: Record<string, 'iron' | 'copper' | 'plate' | 'wire'> = { ironOre: 'iron', copperOre: 'copper', ironIngot: 'iron', copperIngot: 'copper', plate: 'plate', wire: 'wire' };
@@ -655,6 +695,7 @@ async function boot() {
       net.sendOp(op, r => { if (r.ok === false) { undo?.(); sfx.fail(); toast(String(r.msg ?? 'Not possible'), at); } else ok(r); });
     if (action === 'reset') { ask({ k: 'reset' }, () => { sfx.craft(); toast('Breaker reset', at); }); return; }
     if (action === 'filter') { ask({ k: 'filter', id, slot: arg ?? 0 }, () => sfx.pickup()); return; }
+    if (action === 'unwire') { ask({ k: 'unwire', id }, () => { sfx.crumble(); toast('Power lines cut', at); }); return; }
     if (action === 'tokens') { ask({ k: 'tokens' }, r => { const n = Number(r.tokens) || 0; progress.items.token += n; sfx.pickup(); toast(n ? `+${n} tokens` : 'No tokens yet', at); if (n) { say('sink'); first('firstTokens'); } }); return; }
     if (action === 'overclock') {
       if (!progress.has('overclockst') || progress.items.core < 1) { sfx.fail(); toast('Needs the Overclock Station and a core', at); return; }
@@ -681,6 +722,7 @@ async function boot() {
     const at = new THREE.Vector3(mc.x, mc.y + 2.5, mc.z);
     if (action === 'reset') { factory.resetBreaker(); markFactory(); sfx.craft(); toast('Breaker reset', at); return; }
     if (action === 'filter') { factory.cycleFilter(id, arg ?? 0); markFactory(); sfx.pickup(); return; }
+    if (action === 'unwire') { cutLines(id); sfx.crumble(); toast('Power lines cut', at); return; }
     if (action === 'tokens') { const n = factory.takeTokens(); markFactory(); progress.items.token += n; sfx.pickup(); toast(n ? `+${n} tokens` : 'No tokens yet', at); if (n) { say('sink'); first('firstTokens'); } return; }
     if (action === 'overclock') {
       if (!progress.has('overclockst') || progress.items.core < 1) { sfx.fail(); toast('Needs the Overclock Station and a core', at); return; }
@@ -717,7 +759,7 @@ async function boot() {
           ore = o; planet.setOreOccupied(o.index, true);
         }
         const mc = factory.addMachine(kind, n('x'), n('y'), n('z'), n('yaw'), ore);
-        factoryView.addMachine(mc); planet.addMachineCollider(mc.id, mc.x, mc.y, mc.z); markFactory();
+        factoryView.addMachine(mc); planet.addMachineCollider(mc.id, mc.x, mc.y, mc.z); plugToHub(mc); markFactory();
         return { ok: true };
       }
       case 'remove': if (!m) return { ok: false, msg: 'Already gone' }; dismantle(m.id); return { ok: true };
@@ -731,6 +773,15 @@ async function boot() {
       }
       case 'overclock': if (!factory.overclock(n('id'))) return { ok: false, msg: 'Cannot overclock that further' }; markFactory(); return { ok: true };
       case 'filter': factory.cycleFilter(n('id'), n('slot')); markFactory(); return { ok: true };
+      case 'unwire': cutLines(n('id')); return { ok: true };
+      case 'wire': {
+        const pa = plugPoint(n('a')), pb = plugPoint(n('b'));
+        if (!pa || !pb) return { ok: false, msg: 'A machine is gone' };
+        if (pa.distanceTo(pb) > WIRE_RANGE) return { ok: false, msg: `Too far: ${WIRE_RANGE} m at most` };
+        const res = factory.wire(n('a'), n('b'));
+        if (typeof res === 'string') return { ok: false, msg: res };
+        addWireView(res); markFactory(); return { ok: true };
+      }
       case 'fuel': if (!factory.addFuel(n('id'), 5)) return { ok: false, msg: 'That does not burn wood' }; markFactory(); return { ok: true };
       case 'take': { const items = factory.takeAll(n('id')); markFactory(); return { ok: true, items }; }
       case 'tokens': { const tokens = factory.takeTokens(); markFactory(); return { ok: true, tokens }; }
@@ -770,7 +821,7 @@ async function boot() {
         return;
       }
       const mc = factory.addMachine(kind, gp.x, gp.y, gp.z, gp.yaw, ore);
-      factoryView!.addMachine(mc); planet.addMachineCollider(mc.id, gp.x, gp.y, gp.z); markFactory();
+      factoryView!.addMachine(mc); planet.addMachineCollider(mc.id, gp.x, gp.y, gp.z); plugToHub(mc); markFactory();
       sfx.craft(); sfx.thump(new THREE.Vector3(gp.x, gp.y, gp.z));
       toast(`${kind} placed`, new THREE.Vector3(gp.x, gp.y + 3, gp.z));
     } else {

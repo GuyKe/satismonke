@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Factory, Machine, MachineKind, Link, ITEM_COLOR, ItemType } from '../game/Factory';
+import { Factory, Machine, MachineKind, Link, Wire, ITEM_COLOR, ItemType } from '../game/Factory';
 import { heightAt, WATER_Y } from './Terrain';
 
 const steel = new THREE.MeshStandardMaterial({ color: 0x8c97a8, metalness: 0.4, roughness: 0.5 });
@@ -8,6 +8,11 @@ const orange = new THREE.MeshStandardMaterial({ color: 0xe08a3c, metalness: 0.3,
 const blue = new THREE.MeshStandardMaterial({ color: 0x3f78c8, metalness: 0.3, roughness: 0.5 });
 const brick = new THREE.MeshStandardMaterial({ color: 0x8a5a48, roughness: 0.85 });
 const crate = new THREE.MeshStandardMaterial({ color: 0xb08a50, roughness: 0.8 });
+
+/** Height (m above the machine's base) where a power line plugs into each machine. */
+export const ATTACH_Y: Record<MachineKind, number> = { miner: 2.7, smelter: 2.5, constructor: 2.8, storage: 1.3, burner: 2.0, solar: 1.7, splitter: 1.6, sink: 1.9, pole: 4.55 };
+const wood = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.9 });
+const wireMat = new THREE.MeshStandardMaterial({ color: 0x20242e, roughness: 0.5, metalness: 0.3 });
 
 export interface MachineMesh { group: THREE.Group; spin: THREE.Object3D[]; flame: THREE.Mesh | null; light: THREE.Mesh }
 
@@ -56,6 +61,11 @@ export function buildMachineMesh(kind: MachineKind): MachineMesh {
       group.add(blades); spin.push(blades);
       light.position.set(0.7, 0.8, 0.9); break;
     }
+    case 'pole': {
+      group.add(cyl(0.12, 0.17, 4.5, wood, 0, 2.25, 0, 8), box(1.7, 0.14, 0.14, wood, 0, 4.1, 0), box(0.9, 0.12, 0.12, wood, 0, 3.6, 0), box(0.5, 0.3, 0.5, dark, 0, 0.15, 0));
+      for (const dx of [-0.75, 0, 0.75]) group.add(cyl(0.05, 0.07, 0.22, new THREE.MeshStandardMaterial({ color: 0xd8d0c0, roughness: 0.4 }), dx, 4.24, 0, 8));
+      light.position.set(0, 4.5, 0); break;
+    }
     case 'solar': {
       group.add(cyl(0.1, 0.14, 1.4, steel, 0, 0.7, 0));
       const panel = box(2.6, 0.08, 1.7, new THREE.MeshStandardMaterial({ color: 0x1a2a52, metalness: 0.6, roughness: 0.25, emissive: 0x0a1a40, emissiveIntensity: 0.6 }), 0, 1.6, 0);
@@ -83,6 +93,7 @@ export class FactoryView {
   readonly group = new THREE.Group();
   private machines = new Map<number, MachineMesh & { id: number }>();
   private belts = new Map<number, Belt>();
+  private wires = new Map<number, THREE.Mesh>();
   private items: THREE.InstancedMesh;
   private tex = beltTexture();
   private t = 0;
@@ -108,6 +119,22 @@ export class FactoryView {
   removeMachine(id: number): void {
     const mm = this.machines.get(id); if (!mm) return;
     this.group.remove(mm.group); this.machines.delete(id);
+  }
+
+  /** Where a power line meets a machine (or the Hub). */
+  static plug(kind: MachineKind, x: number, y: number, z: number): THREE.Vector3 { return new THREE.Vector3(x, y + ATTACH_Y[kind], z); }
+
+  /** Draw a power line as a sagging cable between two plug points. */
+  addWire(w: Wire, a: THREE.Vector3, b: THREE.Vector3): void {
+    const d = a.distanceTo(b), mid = a.clone().lerp(b, 0.5); mid.y -= Math.min(2.5, 0.35 + d * 0.06);
+    const curve = new THREE.QuadraticBezierCurve3(a, mid, b);
+    const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.max(6, Math.round(d)), 0.035, 5), wireMat);
+    this.group.add(mesh); this.wires.set(w.id, mesh);
+  }
+
+  removeWire(id: number): void {
+    const m = this.wires.get(id); if (!m) return;
+    this.group.remove(m); m.geometry.dispose(); this.wires.delete(id);
   }
 
   /** Route a belt from one machine to another along the ground. Returns its length in metres. */

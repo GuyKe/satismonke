@@ -42,6 +42,9 @@ export const D: Record<string, Set> = {
   craft_copperlantern: [[V('A copper lantern. Brighter, and therefore harder to ignore, like me.')]],
   craft_scanner: [[V('Ore scanner online. Knowing where everything is will make the planet feel so much smaller.')]],
   craft_plasmacore: [[V('Plasma core installed. Gravity has stopped taking your calls.')]],
+  craft_steelbar: [[V('Steel, from ore. Halcyon is delighted: it means crashed pods are no longer your only source of structural integrity.')], [V('You forged steel. Technically you are now a metallurgist. The union will be in touch.')]],
+  craft_pole: [[V('A power pole. Electricity travels along it like gossip along a corridor, and with about the same losses.')]],
+  craft_powerline: [[V('Power line tool ready. Connect the burner to a pole, then the pole to your machines. Machines without power are simply very expensive sculptures.')]],
   craft_burner: [[V('A biomass burner. It converts wood into power and smoke into a future problem.')]],
   craft_smelter: [[V('A smelter. Please keep arms, hair and loose commitments away from the furnace.')]],
   craft_constructor: [[V('A constructor. It builds things from other things, which is the entire economy in one sentence.')]],
@@ -64,6 +67,7 @@ export const D: Record<string, Set> = {
   craft_reactor: [[V('A nuclear reactor. Halcyon would like to state, for the record, that it is perfectly safe, and has already stated it three times.')]],
 
   // ---- factory ----
+  wired: [[V('Power line connected. Electrons have been informed of their new commute.')], [V('A cable. The most direct way to say "this machine now belongs to the grid".')], [V('Connected. If it still does not work, check the burner. It is always the burner.')]],
   burnerFueled: [[V('Fuel loaded. Please stand back. Or forward. Nobody has the data.')]],
   fuelOut: [[V('The burner has gone out. The grid is unimpressed.')], [V('Out of fuel. Wood does not grow on belts, though Halcyon is exploring it.')]],
   powerLow: [[V('Power demand is exceeding supply. Machines are slowing down in solidarity.')], [V('Grid strain detected. Consider a larger generator, or smaller ambitions.')]],
