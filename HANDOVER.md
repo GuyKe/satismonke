@@ -227,3 +227,6 @@ The game saves itself every `AUTOSAVE_SECONDS` (5 minutes) of play on the planet
 
 ## Inventory and tools
 The menu button (Y / Esc) now opens the **inventory** first (`MenuPanel` page `inventory`, on the pause panel): every resource you carry (15 tiles, ores included) and your tools. **Conveyor Link** and **Power Line** are crafted once (bench recipes now show IN BAG afterwards; `Progress.ownsTool`) and then live in the inventory: click the tool, the menu closes, then aim at and click the two things you want joined (B or picking it again puts it away). The **Build Tool** tile appears once the Hub is placed. MENU on the inventory page goes to the pause menu (save, settings...), and the pause menu has an INVENTORY button. Test: `tests/inventory.mjs`.
+
+## Aiming at poles
+The thin Power Pole now has a fat invisible aiming cylinder (`FactoryView`), the machine status card hangs *above* the machine (`ATTACH_Y` + half the card's height) instead of in front of it, and the card is not a click target while a belt/power-line tool is active, so a click can never be swallowed by the card's REMOVE/CUT LINES buttons while you are joining things. Test: `tests/pole-aim.mjs`.
