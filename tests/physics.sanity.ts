@@ -4,6 +4,7 @@ import { GorillaPlayer } from '../src/player/GorillaPlayer';
 import { heightAt } from '../src/world/Terrain';
 import { Progress, RECIPES } from '../src/game/Progress';
 import { Factory } from '../src/game/Factory';
+const legacy = (): Factory => { const f = new Factory(); f.legacyGrid = true; return f; }; // these tests are about belts and machines, not power lines
 import { Zone, Gear, exposure, damagePerSecond, fallDamage, Health } from '../src/game/Hazards';
 import { BuildSystem, PALETTE, cellGround } from '../src/world/BuildSystem';
 import { ArmCalibration, REF_SPAN } from '../src/player/ArmCalibration';
@@ -152,8 +153,8 @@ function swipe(slip: number): number {
 // 10. More recipes
 {
   const pr = new Progress();
-  check('36 recipes, four in the X menu', RECIPES.length === 36 && RECIPES.filter(r => r.where === 'x').length === 4);
-  check('placeables are repeatable', RECIPES.filter(r => r.repeatable).map(r => r.id).join() === 'campfire,lamp,burner,miner,smelter,constructor,storage,conveyor,solar,splitter,sink');
+  check('39 recipes, five in the X menu', RECIPES.length === 39 && RECIPES.filter(r => r.where === 'x').length === 5);
+  check('placeables (and steel forging) are repeatable', RECIPES.filter(r => r.repeatable).map(r => r.id).join() === 'campfire,steelbar,lamp,burner,pole,powerline,miner,smelter,constructor,storage,conveyor,solar,splitter,sink');
   check('float core locked until 4 crystals', !pr.recipe('floatcore').unlocked(pr) && (pr.add('crystal', 4), pr.recipe('floatcore').unlocked(pr)));
   check('crystal gloves need power gloves first', !pr.recipe('crystalgloves').unlocked(pr) && (pr.crafted.add('gloves'), pr.add('crystal', 4), pr.recipe('crystalgloves').unlocked(pr)));
 }
@@ -177,7 +178,7 @@ function swipe(slip: number): number {
 // 12. Factory simulation
 {
   const build = () => {
-    const f = new Factory();
+    const f = legacy();
     const burner = f.addMachine('burner', 0, 0, 0); burner.fuel = 20;
     const miner = f.addMachine('miner', 5, 0, 0, 0, { index: 0, type: 'iron', purity: 1 });
     const smelter = f.addMachine('smelter', 15, 0, 0);
@@ -200,12 +201,12 @@ function swipe(slip: number): number {
   const E = build(); for (let k = 0; k < 2; k++) { const extra = E.f.addMachine('miner', 7, 0, 3 + k, 0, { index: 1 + k, type: 'copper', purity: 1 }); E.f.link(extra.id, E.box.id, 20); }
   run(E.f, 60);
   check('a heavy overload trips the breaker and darkens the grid', E.f.tripped && E.f.power.ratio === 0 && E.miner.status === 'Breaker tripped', `demand ${E.f.power.demand.toFixed(1)} MW vs supply ${E.f.power.supply.toFixed(1)} MW`);
-  const F = new Factory(); const fb = F.addMachine('burner', 0, 0, 0); fb.fuel = 5;
+  const F = legacy(); const fb = F.addMachine('burner', 0, 0, 0); fb.fuel = 5;
   const fm = F.addMachine('miner', 1, 0, 0, 0, { index: 0, type: 'iron', purity: 1 }); const fc = F.addMachine('constructor', 5, 0, 0);
   F.link(fm.id, fc.id, 8); run(F, 120);
   check('ore on a belt into a constructor jams (wrong item = bottleneck)', fm.status === 'Output blocked' && (fc.input.ironIngot ?? 0) === 0 && (F.links[0].items.length > 0));
   check('links are refused when the ends make no sense', typeof A.f.link(A.box.id, A.miner.id, 5) === 'string' && typeof A.f.link(A.miner.id, A.smelter.id, 5) === 'string');
-  const G = new Factory(); G.load(JSON.parse(JSON.stringify(A.f.toJSON())));
+  const G = legacy(); G.load(JSON.parse(JSON.stringify(A.f.toJSON())));
   check('factory state survives save/load', G.machines.length === 5 && G.links.length === 3 && (G.get(A.box.id)!.stored.plate ?? 0) === plates);
   const H = build(); const split = H.f.addMachine('smelter', 15, 0, 8); H.f.link(H.miner.id, split.id, 12); run(H.f, 100);
   check('a miner with two belts splits its output', (H.smelter.status !== 'Waiting for input') && (split.input.ironOre ?? 0) + (split.job ? 1 : 0) + (split.output.ironIngot ?? 0) > 0);
@@ -213,7 +214,7 @@ function swipe(slip: number): number {
 
 // 13. Advanced automation: purity, overclock, breaker, smart splitter, sink
 {
-  const mk = () => { const f = new Factory(); const b = f.addMachine('burner', 0, 0, 0); b.fuel = 60; return { f, b }; };
+  const mk = () => { const f = legacy(); const b = f.addMachine('burner', 0, 0, 0); b.fuel = 60; return { f, b }; };
   const run = (f: Factory, s: number) => { for (let i = 0; i < s * 20; i++) f.update(0.05, 1); };
   // purity
   const P1 = mk(), P2 = mk();
@@ -299,7 +300,7 @@ function swipe(slip: number): number {
   check('health comes back after a few safe seconds', hp.hp > before + 20);
   const dying = new Health(); let dead = false; for (let i = 0; i < 100 && !dead; i++) dead = dying.update(0.1, 20);
   check('enough radiation kills you', dead && dying.hp === 0);
-  const rf = new Factory(); rf.addMachine('miner', 0, 0, 0, 0, { index: 0, type: 'iron', purity: 1 }); rf.reactor = 4; rf.update(1, 0);
+  const rf = legacy(); rf.addMachine('miner', 0, 0, 0, 0, { index: 0, type: 'iron', purity: 1 }); rf.reactor = 4; rf.update(1, 0);
   check('the reactor powers machines at night', rf.power.supply === 4 && rf.power.ratio === 1);
   const rp = new Progress(); rp.crafted.add('gasmask'); rp.crafted.add('hazmat'); rp.mined.uranium = 2;
   check('uranium counts as an ore and gates the reactor', rp.oresMined === 2 && !rp.recipe('reactor').unlocked(rp) && (rp.mined.uranium = 3, rp.recipe('reactor').unlocked(rp)));
