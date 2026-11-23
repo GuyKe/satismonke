@@ -43,7 +43,7 @@ import { ResourceHud, ObjectiveHud } from './ui/Hud';
 import { Progress, RECIPES, POD_HITS, POD_STEEL, BOULDER_HITS, TREE_HITS, CRYSTAL_HITS, MAX_PLACED, MAX_MACHINES } from './game/Progress';
 import { Story } from './game/Story';
 import { Sfx } from './audio/Sfx';
-import { loadSettings, saveSettings } from './settings';
+import { loadSettings, saveSettings, AUTOSAVE_SECONDS } from './settings';
 
 const PLANET_GRAVITY_G = 0.6;
 
@@ -1279,14 +1279,18 @@ async function boot() {
 
     if (inXR || planet) sfx.setListener(headW, new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion));
     if (planet) planet.update(simDt, scene, player.position, headW);
-    if (appMode === 'game' && planet && story.phase === 'planet' && !pauseOpen && (autosave += dt) > 45) { autosave = 0; saveGame(); if (net.isHost && net.state === 'game' && net.allowSaving) void saveRealm(true); }
+    if (appMode === 'game' && planet && story.phase === 'planet' && !pauseOpen && settings.autosave && (autosave += dt) > AUTOSAVE_SECONDS) {
+      autosave = 0;
+      if (currentSlot >= 0) { if (saveGame()) toast('Autosaved', headPos()); }
+      else if (net.isHost && net.state === 'game' && net.allowSaving) void saveRealm(true).then(ok => { if (ok) toast('Realm autosaved', headPos()); });
+    }
 
     renderer.render(loading.active ? loading.scene : scene, camera);
   });
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    health, narrator, net, remotes, voice, loading, withLoading, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    health, narrator, net, remotes, voice, autosaveIn: (s: number) => { autosave = AUTOSAVE_SECONDS - s; }, loading, withLoading, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
     get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },

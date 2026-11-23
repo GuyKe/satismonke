@@ -215,11 +215,12 @@ export class MenuPanel extends Screen {
         const s = this.settings, change = (fn: () => void) => () => { fn(); this.h.onSettings(); this.build(); };
         const qs: Quality[] = ['low', 'medium', 'high'];
         this.btns = [
-          { label: '-', x: 470, y: 96, w: 70, h: 56, act: change(() => { s.volume = Math.max(0, Math.round((s.volume - 0.1) * 10) / 10); }) },
-          { label: '+', x: 690, y: 96, w: 70, h: 56, act: change(() => { s.volume = Math.min(1, Math.round((s.volume + 0.1) * 10) / 10); }) },
-          { label: s.laserAlways ? 'ALWAYS' : 'AUTO', x: 470, y: 166, w: 290, h: 56, act: change(() => { s.laserAlways = !s.laserAlways; }) },
-          { label: s.graphics.toUpperCase(), x: 470, y: 236, w: 290, h: 56, act: change(() => { s.graphics = qs[(qs.indexOf(s.graphics) + 1) % 3]; }) },
-          { label: 'RESET', x: 470, y: 306, w: 290, h: 56, act: () => { this.h.onResetArms(); this.flash('Arm span will be measured again'); } },
+          { label: '-', x: 470, y: 84, w: 70, h: 52, act: change(() => { s.volume = Math.max(0, Math.round((s.volume - 0.1) * 10) / 10); }) },
+          { label: '+', x: 690, y: 84, w: 70, h: 52, act: change(() => { s.volume = Math.min(1, Math.round((s.volume + 0.1) * 10) / 10); }) },
+          { label: s.laserAlways ? 'ALWAYS' : 'AUTO', x: 470, y: 146, w: 290, h: 52, act: change(() => { s.laserAlways = !s.laserAlways; }) },
+          { label: s.graphics.toUpperCase(), x: 470, y: 208, w: 290, h: 52, act: change(() => { s.graphics = qs[(qs.indexOf(s.graphics) + 1) % 3]; }) },
+          { label: s.autosave ? 'EVERY 5 MIN' : 'OFF', x: 470, y: 270, w: 290, h: 52, act: change(() => { s.autosave = !s.autosave; }) },
+          { label: 'RESET', x: 470, y: 332, w: 290, h: 52, act: () => { this.h.onResetArms(); this.flash('Arm span will be measured again'); } },
           this.back(),
         ];
         break;
@@ -386,11 +387,11 @@ export class MenuPanel extends Screen {
     }
     if (this.page === 'settings') {
       ctx.textAlign = 'left'; ctx.fillStyle = '#d8e8f0'; ctx.font = 'bold 26px monospace';
-      ['Volume', 'Laser pointer', 'Graphics', 'Arm span'].forEach((l, i) => ctx.fillText(l, 50, 134 + i * 70));
-      ctx.font = '17px monospace'; ctx.fillStyle = '#7a8aa0';
-      ['', 'AUTO shows it when aimed at a screen', 'Applies to the next planet you land on', 'Measured when you stretch your arms wide'].forEach((l, i) => ctx.fillText(l, 50, 156 + i * 70));
+      ['Volume', 'Laser pointer', 'Graphics', 'Autosave', 'Arm span'].forEach((l, i) => ctx.fillText(l, 50, 118 + i * 62));
+      ctx.font = '15px monospace'; ctx.fillStyle = '#7a8aa0';
+      ['', 'AUTO shows it when aimed at a screen', 'Applies to the next planet you land on', 'Saves your game by itself while you play', 'Measured when you stretch your arms wide'].forEach((l, i) => ctx.fillText(l, 50, 138 + i * 62));
       ctx.textAlign = 'center'; ctx.fillStyle = '#ffb347'; ctx.font = 'bold 30px monospace';
-      ctx.fillText(`${Math.round(this.settings.volume * 100)}%`, 615, 134);
+      ctx.fillText(`${Math.round(this.settings.volume * 100)}%`, 615, 120);
     }
     if (this.page === 'slots') {
       for (let i = 0; i < SLOTS; i++) {

@@ -15,7 +15,11 @@ export interface Settings {
   volume: number;
   /** Detail level of the planet (applies to the next planet you land on or load). */
   graphics: Quality;
+  /** Save the game by itself every 5 minutes. */
+  autosave: boolean;
 }
+
+export const AUTOSAVE_SECONDS = 5 * 60;
 
 export const GRAVITY_STEPS = [0, 0.15, 0.3, 0.6, 1];
 export const JUMP_STEPS = [1.0, 1.1, 1.25, 1.4, 1.6];
@@ -23,7 +27,7 @@ export const JUMP_STEPS = [1.0, 1.1, 1.25, 1.4, 1.6];
 const KEY = 'satismonke.settings.v1';
 
 export function defaultSettings(): Settings {
-  return { gravityG: 0.3, jumpMult: 1.25, maxSpeed: 8, laserAlways: false, armSpan: 0, volume: 0.8, graphics: 'medium' };
+  return { gravityG: 0.3, jumpMult: 1.25, maxSpeed: 8, laserAlways: false, armSpan: 0, volume: 0.8, graphics: 'medium', autosave: true };
 }
 
 export function loadSettings(): Settings {
