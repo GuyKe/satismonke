@@ -221,3 +221,6 @@ The Crowded Jungle now packs ~9000 trees (medium quality) with a minimum spacing
 
 ## Button layout check
 `tests/buttons.mjs` puts every machine type into its worst states (tripped, wired, overclockable) and checks that every button on the machine panel sits inside the panel and overlaps no other: a button past the edge can never be clicked. The machine panel now shortens its labels and shrinks its buttons to fit one row. The menu pages were audited the same way (no problems found).
+
+## Autosave
+The game saves itself every `AUTOSAVE_SECONDS` (5 minutes) of play on the planet (not while paused): solo games write to their slot, and a lobby host with saving on saves the realm. A small "Autosaved" / "Realm autosaved" toast confirms it. Settings -> **Autosave** (EVERY 5 MIN / OFF, stored in `Settings.autosave`). Manual saves and "save & main menu" work as before. Test: `tests/autosave.mjs` (uses the `autosaveIn` debug hook).
