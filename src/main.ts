@@ -21,7 +21,7 @@ import { PlayerModel } from './world/PlayerModel';
 import { Health, Gear, damagePerSecond, fallDamage } from './game/Hazards';
 import { toWorld } from './world/Hub';
 import { Factory, MachineKind, ITEM_NAME, FactoryState, Wire, HUB_NODE, HUB_PLUG_RANGE, WIRE_RANGE } from './game/Factory';
-import { FactoryView, buildMachineMesh } from './world/FactoryView';
+import { FactoryView, buildMachineMesh, ATTACH_Y } from './world/FactoryView';
 import { MachinePanel, MachineAction } from './ui/MachinePanel';
 import { MenuRoom, Slide } from './world/MenuRoom';
 import { takeSnapshots } from './world/Snapshots';
@@ -1097,7 +1097,7 @@ async function boot() {
       if (floating === 'map') targets.push(map);
       if (floating === 'craft') targets.push(craftPanel);
       if (buildActive) targets.push(buildPanel);
-      if (machinePanel.mesh.visible) targets.push(machinePanel);
+      if (machinePanel.mesh.visible && !linkMode) targets.push(machinePanel);   // while joining things, the status card must never swallow a click
       if (hubUi && planet?.hub && Math.hypot(planet.hub.pose.x - headW.x, planet.hub.pose.z - headW.z) < 14) targets.push(hubUi.bench, hubUi.computer, hubUi.upgrades, hubUi.research);
     }
     const meshes = targets.map(t => t.mesh);
@@ -1132,8 +1132,10 @@ async function boot() {
       const sp = selectedMachine !== null ? factoryView.position(selectedMachine) : null;
       if (sp) {
         const dist = Math.max(1, sp.distanceTo(headW));
-        machinePanel.mesh.position.set(sp.x, sp.y + 3.0 + dist * 0.12, sp.z);
-        machinePanel.mesh.scale.setScalar(THREE.MathUtils.clamp(dist / 4, 1, 3.2));
+        const sc = THREE.MathUtils.clamp(dist / 4, 1, 3.2), kind = factory.get(selectedMachine!)?.kind;
+        // hang the card above the machine (not in front of it), so aiming at the machine never hits the card
+        machinePanel.mesh.position.set(sp.x, sp.y + (kind ? ATTACH_Y[kind] : 3) + 0.45 + 0.5 * machinePanel.height * sc, sp.z);
+        machinePanel.mesh.scale.setScalar(sc);
         machinePanel.mesh.lookAt(headW);
       }
       machinePanel.update(dt);
@@ -1313,7 +1315,7 @@ async function boot() {
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    health, narrator, net, remotes, voice, autosaveIn: (s: number) => { autosave = AUTOSAVE_SECONDS - s; }, loading, withLoading, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    THREE, health, narrator, net, remotes, voice, autosaveIn: (s: number) => { autosave = AUTOSAVE_SECONDS - s; }, loading, withLoading, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
     get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },

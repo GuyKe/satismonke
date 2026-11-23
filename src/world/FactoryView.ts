@@ -64,7 +64,10 @@ export function buildMachineMesh(kind: MachineKind): MachineMesh {
     case 'pole': {
       group.add(cyl(0.12, 0.17, 4.5, wood, 0, 2.25, 0, 8), box(1.7, 0.14, 0.14, wood, 0, 4.1, 0), box(0.9, 0.12, 0.12, wood, 0, 3.6, 0), box(0.5, 0.3, 0.5, dark, 0, 0.15, 0));
       for (const dx of [-0.75, 0, 0.75]) group.add(cyl(0.05, 0.07, 0.22, new THREE.MeshStandardMaterial({ color: 0xd8d0c0, roughness: 0.4 }), dx, 4.24, 0, 8));
-      light.position.set(0, 4.5, 0); break;
+      light.position.set(0, 4.5, 0);
+      // a fat invisible target so the thin pole is easy to aim at with the laser
+      const aim = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 4.8, 8), new THREE.MeshBasicMaterial({ visible: false })); aim.position.y = 2.4; group.add(aim);
+      break;
     }
     case 'solar': {
       group.add(cyl(0.1, 0.14, 1.4, steel, 0, 0.7, 0));
