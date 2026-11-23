@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { Screen } from './Screen';
 import { heightAt, pathMask, PONDS, pondY, WATER_Y } from '../world/Terrain';
 import type { Planet } from '../world/Planet';
+import { getMap } from '../world/MapDef';
+
+const rgb = (c: number): number[] => [(c >> 16) & 255, (c >> 8) & 255, c & 255];
 
 const W = 640, H = 740;
 const MAP = { x: 20, y: 58, s: 600 };
@@ -59,7 +62,7 @@ export class MapMenu extends Screen {
   private renderBase(px: number, pz: number): void {
     const R = ZOOMS[this.zoom];
     const img = this.baseCtx.createImageData(RES, RES);
-    const pink = [198, 80, 180], violet = [138, 74, 204], sand = [226, 186, 160], shallow = [90, 214, 230], deep = [20, 80, 120];
+    const mp = getMap(), pink = rgb(mp.groundA), violet = rgb(mp.groundB), sand = rgb(mp.sand), shallow = [90, 214, 230], deep = [20, 80, 120];
     for (let j = 0; j < RES; j++) {
       for (let i = 0; i < RES; i++) {
         const wx = px + ((i + 0.5) / RES - 0.5) * 2 * R, wz = pz + ((j + 0.5) / RES - 0.5) * 2 * R;

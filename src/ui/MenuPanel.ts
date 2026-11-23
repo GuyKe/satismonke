@@ -3,22 +3,25 @@ import { Screen } from './Screen';
 import { SaveData, SLOTS, listSlots, formatAgo, formatPlaytime } from '../game/Save';
 import type { Settings, Quality } from '../settings';
 import { CODE_CHARS, CODE_LEN } from '../net/Multiplayer';
+import { MAPS, MAP_IDS, MapId } from '../world/MapDef';
 import { Look, FUR_PALETTE, SUIT_PALETTE, SUIT_NAMES, HATS, BADGES, stepColor, stepItem, redeem, loadUnlocked } from '../game/Cosmetics';
 import { CONTROLS_LINES, HOWTO_LINES, RESOURCE_GUIDE } from './helpText';
 
 const W = 800, H = 500;
-type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby' | 'realms' | 'custom' | 'code';
+type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby' | 'realms' | 'custom' | 'code' | 'maps';
 
 /** A saved realm, either one you host or one you are a member of. */
 export interface RealmEntry { code: string; kind: 'host' | 'member'; line1: string; line2: string }
-export interface LobbyInfo { allowSaving: boolean; maxPlayers: number; realm: boolean; mic: string; code: string; isHost: boolean; status: 'connecting' | 'lobby' | 'game' | 'error'; error: string; players: { name: string; color: number }[] }
+export interface LobbyInfo { map: MapId; allowSaving: boolean; maxPlayers: number; realm: boolean; mic: string; code: string; isHost: boolean; status: 'connecting' | 'lobby' | 'game' | 'error'; error: string; players: { name: string; color: number }[] }
 const GUIDE_PER_PAGE = 4;
 
 interface Btn { label: string; x: number; y: number; w: number; h: number; act: () => void; danger?: boolean; dim?: boolean }
 
 export interface MenuHandlers {
   /** Start (mode 'new') or continue (mode 'load') the game in a slot. */
-  onStart(slot: number, mode: 'new' | 'load'): void;
+  onStart(slot: number, mode: 'new' | 'load', map?: MapId): void;
+  /** The host picked a map for the lobby. */
+  onPickMap(map: MapId): void;
   onDelete(slot: number): void;
   onResume(): void;
   onSave(): void;
@@ -53,6 +56,10 @@ export class MenuPanel extends Screen {
   private armedRealm = '';
   private realmList: RealmEntry[] = [];
   private typed = '';
+  /** The map page: what to do with the choice, and where BACK goes. */
+  private mapPick: (m: MapId) => void = () => {};
+  private mapBack: Page = 'main';
+  private mapNow: MapId | null = null;
   private status = '';
   private statusT = 0;
   private dirty = true;
@@ -108,7 +115,7 @@ export class MenuPanel extends Screen {
         this.btns = [];
         for (let i = 0; i < SLOTS; i++) {
           const y = 110 + i * 100, s = this.slots[i];
-          this.btns.push({ label: s ? 'LOAD' : 'NEW', x: 520, y: y + 8, w: 150, h: 70, act: () => this.h.onStart(i, s ? 'load' : 'new') });
+          this.btns.push({ label: s ? 'LOAD' : 'NEW', x: 520, y: y + 8, w: 150, h: 70, act: () => (s ? this.h.onStart(i, 'load') : this.openMaps('slots', null, m => this.h.onStart(i, 'new', m))) });
           if (s) this.btns.push({
             label: this.armedDelete === i ? 'SURE?' : 'DEL', x: 685, y: y + 8, w: 90, h: 70, danger: true,
             act: () => {
@@ -132,6 +139,12 @@ export class MenuPanel extends Screen {
           { label: 'JOIN', x: 314, y: 410, w: 170, h: 60, dim: this.code.length < CODE_LEN, act: () => { if (this.code.length === CODE_LEN) this.h.onJoin(this.code); } },
           { label: 'BACK', x: 602, y: 410, w: 170, h: 60, act: () => this.go('multi') },
         );
+        break;
+      }
+      case 'maps': {
+        this.btns = [];
+        MAP_IDS.forEach((id, i) => this.btns.push({ label: this.mapNow === id ? 'SELECTED' : 'SELECT', x: 24 + i * 260 + 20, y: 340, w: 200, h: 50, act: () => this.mapPick(id) }));
+        this.btns.push({ label: 'BACK', x: 280, y: 410, w: 240, h: 60, act: () => this.go(this.mapBack) });
         break;
       }
       case 'custom': {
@@ -176,8 +189,9 @@ export class MenuPanel extends Screen {
         const l = this.lobby;
         this.btns = [];
         if (l && l.status === 'lobby' && l.isHost) {
-          this.btns.push({ label: `SAVING: ${l.allowSaving ? 'ON' : 'OFF'}`, x: 40, y: 300, w: 350, h: 46, act: () => this.h.onToggleSaving() });
-          this.btns.push({ label: `MAX PLAYERS: ${l.maxPlayers}`, x: 410, y: 300, w: 350, h: 46, act: () => this.h.onCycleMax() });
+          this.btns.push({ label: `SAVING: ${l.allowSaving ? 'ON' : 'OFF'}`, x: 24, y: 300, w: 245, h: 46, act: () => this.h.onToggleSaving() });
+          this.btns.push({ label: `MAX: ${l.maxPlayers}`, x: 277, y: 300, w: 200, h: 46, act: () => this.h.onCycleMax() });
+          this.btns.push({ label: `MAP: ${MAPS[l.map].name.split(' ')[1]}`, x: 485, y: 300, w: 291, h: 46, dim: l.realm, act: () => { if (!l.realm) this.openMaps('lobby', l.map, m => { this.h.onPickMap(m); this.go('lobby'); }); } });
           this.btns.push({ label: l.realm ? 'START REALM' : 'START GAME', x: 190, y: 354, w: 420, h: 48, act: () => this.h.onStartLobby() });
         }
         if (l && l.status !== 'error' && l.status !== 'connecting') this.btns.push({ label: this.micLabel(l.mic), x: 30, y: 410, w: 200, h: 60, dim: l.mic === 'nomic', act: () => this.h.onToggleMic() });
@@ -213,12 +227,31 @@ export class MenuPanel extends Screen {
     }
   }
 
+  /** Open the map chooser. `now` marks the map already chosen (if any). */
+  private openMaps(back: Page, now: MapId | null, pick: (m: MapId) => void): void { this.mapBack = back; this.mapNow = now; this.mapPick = pick; this.go('maps'); }
+
   private submitCode(): void {
     if (!this.typed) return;
     const r = redeem(this.typed);
     this.flash(r.message);
     if (r.ok) { this.typed = ''; if (r.equip) this.h.onLook({ ...this.h.getLook(), ...r.equip }); }
     this.build();
+  }
+
+  /** A little painted view of a map for its card. */
+  private drawMapArt(ctx: CanvasRenderingContext2D, id: MapId, x: number, y: number, w: number, h: number): void {
+    const m = MAPS[id], hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
+    const sky = ctx.createLinearGradient(0, y, 0, y + h); sky.addColorStop(0, '#6a58d0'); sky.addColorStop(1, '#e8b8e8');
+    ctx.fillStyle = sky; ctx.fillRect(x, y, w, h);
+    ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip();
+    const hill = (base: number, amp: number, wl: number, col: string) => { ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(x, y + h); for (let i = 0; i <= w; i += 4) ctx.lineTo(x + i, y + base + Math.sin(i / wl + base) * amp); ctx.lineTo(x + w, y + h); ctx.fill(); };
+    hill(h * 0.42, 6, 18, hex(m.mountain[1]));
+    hill(h * (id === 'jungle' ? 0.5 : 0.62), id === 'jungle' ? 10 : id === 'desert' ? 9 : 5, id === 'desert' ? 26 : 16, hex(m.groundB));
+    hill(h * 0.78, id === 'desert' ? 8 : 4, 22, hex(m.groundA));
+    if (id === 'jungle') for (let i = 0; i < 34; i++) { const tx = x + ((i * 53) % w), ty = y + h * 0.45 + ((i * 29) % (h * 0.5)); ctx.fillStyle = hex(m.treePalette[i % 4]); ctx.beginPath(); ctx.arc(tx, ty, 6 + (ty - y) / 12, 0, 7); ctx.fill(); }
+    if (id === 'plains') for (let i = 0; i < 5; i++) { const tx = x + 20 + i * 48, ty = y + h * 0.66; ctx.fillStyle = hex(m.treePalette[i % 4]); ctx.beginPath(); ctx.arc(tx, ty, 7, 0, 7); ctx.fill(); }
+    if (id === 'desert') { ctx.fillStyle = '#3fd6e6'; ctx.beginPath(); ctx.ellipse(x + w * 0.62, y + h * 0.86, 30, 7, 0, 0, 7); ctx.fill(); }
+    ctx.restore();
   }
 
   private micLabel(m: string): string { return m === 'on' ? 'MIC ON' : m === 'muted' ? 'MIC OFF' : m === 'nomic' ? 'NO MIC' : 'MIC...'; }
@@ -257,7 +290,7 @@ export class MenuPanel extends Screen {
     ctx.fillStyle = '#080c18'; ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 6; ctx.strokeRect(5, 5, W - 10, H - 10);
     ctx.fillStyle = '#ffb347';
-    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY', realms: 'MY REALMS', custom: 'CUSTOMISE', code: 'ENTER A CODE' };
+    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY', realms: 'MY REALMS', custom: 'CUSTOMISE', code: 'ENTER A CODE', maps: 'CHOOSE A MAP' };
     ctx.font = this.page === 'main' ? 'bold 72px monospace' : 'bold 48px monospace';
     ctx.fillText(titles[this.page], W / 2, this.page === 'main' ? 110 : 66);
 
@@ -265,6 +298,22 @@ export class MenuPanel extends Screen {
       ctx.fillStyle = '#9ab'; ctx.font = '20px monospace';
       ctx.fillText('Play the planet with friends. One of you creates a lobby,', W / 2, 108);
       ctx.fillText('the others type its 4-letter code. Everyone starts fresh.', W / 2, 132);
+    }
+    if (this.page === 'maps') {
+      MAP_IDS.forEach((id, i) => {
+        const m = MAPS[id], x = 24 + i * 260, y = 84, w = 248, hot = this.mapNow === id;
+        ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, y, w, 300);
+        ctx.strokeStyle = hot ? '#7fe3c1' : '#2a3a5a'; ctx.lineWidth = hot ? 4 : 2; ctx.strokeRect(x, y, w, 300);
+        this.drawMapArt(ctx, id, x + 8, y + 8, w - 16, 84);
+        ctx.textAlign = 'center'; ctx.fillStyle = '#ffb347'; ctx.font = 'bold 21px monospace'; ctx.fillText(m.name, x + w / 2, y + 120);
+        ctx.fillStyle = '#9ab'; ctx.font = '14px monospace'; m.blurb.forEach((t, k) => ctx.fillText(t, x + w / 2, y + 144 + k * 16));
+        const pips = (label: string, n: number, col: string, yy: number) => {
+          ctx.textAlign = 'left'; ctx.fillStyle = '#d8e8f0'; ctx.font = 'bold 14px monospace'; ctx.fillText(label, x + 12, yy);
+          for (let k = 0; k < 5; k++) { ctx.fillStyle = k < n ? col : '#252f46'; ctx.fillRect(x + 128 + k * 22, yy - 13, 18, 14); }
+        };
+        pips('DIFFICULTY', m.ratings.difficulty, '#ff6a5a', y + 200); pips('OPEN SPACE', m.ratings.space, '#5ab4ff', y + 226); pips('RESOURCES', m.ratings.resources, '#ffd23a', y + 252);
+      });
+      ctx.textAlign = 'center';
     }
     if (this.page === 'custom') {
       const l = this.h.getLook(), u = loadUnlocked();

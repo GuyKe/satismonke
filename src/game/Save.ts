@@ -10,6 +10,8 @@ export interface PlanetState {
   /** The detail level the world was generated with: indices in this save only match that exact world. */
   quality: 'low' | 'medium' | 'high';
   clock: number;
+  /** Which map the world is (missing in older saves: the grassy plains). */
+  map?: 'plains' | 'jungle' | 'desert';
   felledTrees: number[]; brokenBoulders: number[]; brokenCrystals: number[]; brokenOres: number[];
   podAlive: boolean; podHead: [number, number, number]; podForward: [number, number, number];
   hub: { x: number; y: number; z: number; yaw: number } | null;
@@ -27,6 +29,8 @@ export interface SaveData {
   playSeconds: number;
   /** 'capsule' = still in the pod sequence (a fresh start); 'planet' = landed. */
   phase: 'capsule' | 'planet';
+  /** The map this game is on (missing in older saves: the grassy plains). */
+  map?: 'plains' | 'jungle' | 'desert';
   objective: string;
   progress: ProgressData;
   player: { x: number; y: number; z: number };
