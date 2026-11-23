@@ -2,7 +2,7 @@
 import { createRequire } from 'module';
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_DIR + 'playwright');
 const b = await chromium.launch({ args: ['--use-gl=swiftshader', '--no-sandbox'] });
-const URL = 'http://localhost:4173/?peerhost=127.0.0.1&peerport=9000';
+const URL = 'http://localhost:4173/?peerhost=127.0.0.1&peerport=9000&fastload=1';
 const mk = async () => { const p = await b.newPage(); p.errs = []; p.on('pageerror', e => p.errs.push(String(e))); await p.goto(URL); await p.waitForFunction(() => window.__game, null, { timeout: 60000 }); return p; };
 const A = await mk(), B = await mk();
 await A.evaluate(() => window.__game.net.host()); await A.waitForFunction(() => window.__game.net.state === 'lobby');

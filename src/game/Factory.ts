@@ -7,7 +7,15 @@
  * between them (a splitter); one with several incoming links is a merger. Smart splitters route by item type.
  */
 export type ItemType = 'ironOre' | 'copperOre' | 'ironIngot' | 'copperIngot' | 'plate' | 'wire';
-export type MachineKind = 'miner' | 'smelter' | 'constructor' | 'storage' | 'burner' | 'solar' | 'splitter' | 'sink';
+export type MachineKind = 'miner' | 'smelter' | 'constructor' | 'storage' | 'burner' | 'solar' | 'splitter' | 'sink' | 'pole';
+/** The Hub is a node on the power grid too (its solar roof and reactor feed it). */
+export const HUB_NODE = -1;
+/** A power line can be at most this long (metres). */
+export const WIRE_RANGE = 35;
+/** Wires one pole can hold. */
+export const POLE_PORTS = 8;
+/** A pole placed this close to the Hub plugs into it by itself. */
+export const HUB_PLUG_RANGE = 16;
 export type SlotFilter = 'any' | ItemType | 'overflow';
 export const SLOT_FILTERS: SlotFilter[] = ['any', 'ironOre', 'copperOre', 'ironIngot', 'copperIngot', 'plate', 'wire', 'overflow'];
 export const SLOT_NAMES = ['LEFT', 'CENTER', 'RIGHT'];
@@ -18,8 +26,8 @@ export const ITEM_NAME: Record<ItemType, string> = { ironOre: 'iron ore', copper
 export const ITEM_VALUE: Record<ItemType, number> = { ironOre: 1, copperOre: 1, ironIngot: 2, copperIngot: 2, plate: 5, wire: 3 };
 
 /** MW consumed (positive) or produced (negative). */
-export const MACHINE_POWER: Record<MachineKind, number> = { miner: 0.3, smelter: 0.3, constructor: 0.4, storage: 0, burner: -1, solar: -0.6, splitter: 0.05, sink: 0.3 };
-export const MACHINE_NAME: Record<MachineKind, string> = { miner: 'Miner', smelter: 'Smelter', constructor: 'Constructor', storage: 'Storage Box', burner: 'Biomass Burner', solar: 'Solar Panel', splitter: 'Smart Splitter', sink: 'Resource Sink' };
+export const MACHINE_POWER: Record<MachineKind, number> = { miner: 0.3, smelter: 0.3, constructor: 0.4, storage: 0, burner: -1, solar: -0.6, splitter: 0.05, sink: 0.3, pole: 0 };
+export const MACHINE_NAME: Record<MachineKind, string> = { miner: 'Miner', smelter: 'Smelter', constructor: 'Constructor', storage: 'Storage Box', burner: 'Biomass Burner', solar: 'Solar Panel', splitter: 'Smart Splitter', sink: 'Resource Sink', pole: 'Power Pole' };
 
 export const CYCLE = 2;            // seconds per item at full power = 30 per minute
 export const BUFFER = 10;          // input / output buffer size
@@ -54,6 +62,10 @@ export interface Machine {
   altToggle: number;
 }
 
+/** A power line between a pole and a machine, another pole or the Hub (HUB_NODE). */
+export interface Wire { id: number; a: number; b: number }
+export interface PowerNet { supply: number; demand: number; ratio: number; tripped: boolean }
+
 export interface Link { id: number; from: number; to: number; length: number; slot: number; items: { t: number; type: ItemType }[] }
 
 export interface FactoryState {
@@ -61,6 +73,10 @@ export interface FactoryState {
   tokens?: number;
   machines: { id: number; kind: MachineKind; x: number; y: number; z: number; yaw: number; ore: Machine['ore']; input: Buf; output: Buf; stored: Buf; fuel: number; clock?: number; slots?: Slot[]; job?: Machine['job']; prog?: number }[];
   links: { id: number; from: number; to: number; length: number; slot?: number; items?: Link['items'] }[];
+  /** Power lines. Missing in old saves: those keep the old single shared grid. */
+  wires?: Wire[];
+  /** Breaker state per machine (multiplayer snapshots). */
+  tripped?: number[];
   /** Multiplayer snapshots also carry the shared settings and the breaker. */
   cfg?: { minerMult: number; alt: Factory['alt']; roofSolar: number; reactor: number; tripped: boolean };
 }
@@ -68,6 +84,9 @@ export interface FactoryState {
 export class Factory {
   machines: Machine[] = [];
   links: Link[] = [];
+  wires: Wire[] = [];
+  /** Old saves (from before power poles) keep one grid shared by everything. */
+  legacyGrid = false;
   clock = 0;
   /** Miner speed multiplier (for upgrades). */
   minerMult = 1;
@@ -81,10 +100,13 @@ export class Factory {
   tokens = 0;
   tripped = false;
   power = { supply: 0, demand: 0, ratio: 1 };
+  /** Each machine's power network, rebuilt every update. */
+  private netOf = new Map<number, PowerNet>();
+  private breaker = new Set<number>();   // ids of machines whose network tripped
   private nextId = 1;
 
   reset(): void {
-    this.machines = []; this.links = []; this.nextId = 1; this.clock = 0; this.minerMult = 1; this.tokens = 0; this.tripped = false;
+    this.machines = []; this.links = []; this.wires = []; this.legacyGrid = false; this.breaker.clear(); this.netOf.clear(); this.nextId = 1; this.clock = 0; this.minerMult = 1; this.tokens = 0; this.tripped = false;
     this.alt = { plate: false, wire: false, smelt: false, efficiency: false }; this.roofSolar = 0; this.reactor = 0;
     this.power = { supply: 0, demand: 0, ratio: 1 };
   }
@@ -104,8 +126,14 @@ export class Factory {
     for (const m of this.machines) for (const s of m.slots) if (s.link !== null && gone.includes(s.link)) s.link = null;
     this.links = this.links.filter(l => !gone.includes(l.id));
     this.machines = this.machines.filter(m => m.id !== id);
+    this.removedWires = this.wires.filter(w => w.a === id || w.b === id).map(w => w.id);
+    this.wires = this.wires.filter(w => w.a !== id && w.b !== id);
+    this.breaker.delete(id);
     return gone;
   }
+
+  /** Wire ids dropped by the last removeMachine (so the view can remove them too). */
+  removedWires: number[] = [];
 
   static canSend(k: MachineKind): boolean { return k === 'miner' || k === 'smelter' || k === 'constructor' || k === 'splitter'; }
   static canReceive(k: MachineKind): boolean { return k === 'smelter' || k === 'constructor' || k === 'storage' || k === 'splitter' || k === 'sink'; }
@@ -148,32 +176,59 @@ export class Factory {
   /** Items per minute this machine has actually produced over the last minute. */
   perMin(m: Machine): number { return m.made.filter(t => this.clock - t <= 60).length * (this.clock < 60 ? 60 / Math.max(this.clock, 5) : 1); }
 
-  resetBreaker(): void { this.tripped = false; }
+  resetBreaker(): void { this.breaker.clear(); this.tripped = false; for (const n of this.netOf.values()) n.tripped = false; }
 
   /** Power one machine draws at full activity, with overclock and research applied. */
   private draw(m: Machine): number { return MACHINE_POWER[m.kind] * clockPower(m.clock) * (this.alt.efficiency ? 0.8 : 1); }
+
+  /**
+   * Work out each power network: machines joined by power lines (everything is one network in old saves). A network's
+   * supply is its burners with fuel, its solar panels, and the Hub's roof and reactor if the Hub is on it.
+   */
+  private balancePower(dt: number, daylight: number): void {
+    const parent = new Map<number, number>();
+    const find = (x: number): number => { let r = x; while (parent.get(r) !== r) r = parent.get(r)!; while (parent.get(x) !== r) { const n = parent.get(x)!; parent.set(x, r); x = n; } return r; };
+    parent.set(HUB_NODE, HUB_NODE);
+    for (const m of this.machines) parent.set(m.id, m.id);
+    if (this.legacyGrid) for (const m of this.machines) parent.set(m.id, HUB_NODE);
+    else for (const w of this.wires) if (parent.has(w.a) && parent.has(w.b)) parent.set(find(w.a), find(w.b));
+    const comps = new Map<number, { ids: number[]; supply: number; demand: number }>();
+    const comp = (id: number) => { const r = find(id); let c = comps.get(r); if (!c) { c = { ids: [], supply: 0, demand: 0 }; comps.set(r, c); } return c; };
+    comp(HUB_NODE).supply += this.roofSolar * daylight + this.reactor;
+    for (const m of this.machines) {
+      const c = comp(m.id); c.ids.push(m.id);
+      if (m.kind === 'burner') { if (m.fuel > 0) c.supply += -MACHINE_POWER.burner; }
+      else if (m.kind === 'solar') c.supply += -MACHINE_POWER.solar * daylight;
+      else if (m.active) c.demand += this.draw(m);
+    }
+    for (const id of [...this.breaker]) if (!this.get(id)) this.breaker.delete(id);
+    this.netOf.clear();
+    let supply = 0, demand = 0, any = false;
+    for (const c of comps.values()) {
+      let tripped = c.ids.some(id => this.breaker.has(id));
+      if (!tripped && c.supply > 0 && c.demand > 0.05 && c.demand > c.supply * TRIP_RATIO) { tripped = true; for (const id of c.ids) this.breaker.add(id); } // overloaded: the breaker pops (no supply at all is just 'No power')
+      const ratio = tripped ? 0 : c.demand > 0 ? Math.min(1, c.supply / c.demand) : 1;
+      const net: PowerNet = { supply: c.supply, demand: c.demand, ratio, tripped };
+      for (const id of c.ids) this.netOf.set(id, net);
+      if (c.demand > 0 && !tripped) for (const id of c.ids) { const m = this.get(id); if (m && m.kind === 'burner' && m.fuel > 0) m.fuel = Math.max(0, m.fuel - dt / WOOD_SECONDS); }
+      supply += c.supply; demand += c.demand; any = any || tripped;
+    }
+    this.tripped = any;
+    this.power = { supply, demand, ratio: any ? 0 : demand > 0 ? Math.min(1, supply / demand) : 1 };
+  }
 
   /** Advance the simulation. `daylight` is 0..1 (solar panels). */
   update(dt: number, daylight = 1): void {
     this.clock += dt;
 
-    // ---- power ----
-    let supply = this.roofSolar * daylight + this.reactor, demand = 0;
-    for (const m of this.machines) {
-      if (m.kind === 'burner') { if (m.fuel > 0) supply += -MACHINE_POWER.burner; }
-      else if (m.kind === 'solar') supply += -MACHINE_POWER.solar * daylight;
-      else if (m.active) demand += this.draw(m);
-    }
-    if (!this.tripped && supply > 0 && demand > 0.05 && demand > supply * TRIP_RATIO) this.tripped = true; // overloaded: the breaker pops (no supply at all is just 'No power')
-    const ratio = this.tripped ? 0 : demand > 0 ? Math.min(1, supply / demand) : 1;
-    this.power = { supply, demand, ratio };
-    if (demand > 0 && !this.tripped) for (const m of this.machines) if (m.kind === 'burner' && m.fuel > 0) m.fuel = Math.max(0, m.fuel - dt / WOOD_SECONDS);
-    const speed = ratio;
-    const noPower = (m: Machine) => { m.status = this.tripped ? 'Breaker tripped' : 'No power'; };
+    // ---- power: every machine sits on a network of power lines; each network balances on its own ----
+    this.balancePower(dt, daylight);
+    const noPower = (m: Machine) => { m.status = this.netFor(m.id).tripped ? 'Breaker tripped' : 'No power'; };
 
     // ---- machines ----
     for (const m of this.machines) {
       m.active = false;
+      const speed = this.netFor(m.id).ratio;
       switch (m.kind) {
         case 'miner': {
           if (!m.ore) { m.status = 'Not on ore'; break; }
@@ -215,8 +270,9 @@ export class Factory {
           if (m.prog >= 0.5) { m.prog -= 0.5; m.input[type]! -= 1; this.tokens += ITEM_VALUE[type]; m.made.push(this.clock); if (m.made.length > 40) m.made.shift(); }
           break;
         }
-        case 'splitter': m.status = this.tripped ? 'Breaker tripped' : total(m.input) > 0 ? 'Sorting' : 'Waiting for input'; m.active = total(m.input) > 0; break;
-        case 'burner': m.status = m.fuel > 0 ? (demand > 0 ? 'Burning' : 'Standby') : 'Out of fuel'; break;
+        case 'splitter': m.status = this.netFor(m.id).tripped ? 'Breaker tripped' : speed <= 0 ? 'No power' : total(m.input) > 0 ? 'Sorting' : 'Waiting for input'; m.active = total(m.input) > 0; break;
+        case 'pole': { const n = this.wireCount(m.id); m.status = n === 0 ? 'No lines' : this.netFor(m.id).tripped ? 'Breaker tripped' : this.netFor(m.id).supply <= 0 ? 'No power' : `Live: ${n} line${n > 1 ? 's' : ''}`; break; }
+        case 'burner': m.status = m.fuel > 0 ? (this.netFor(m.id).demand > 0 ? 'Burning' : 'Standby') : 'Out of fuel'; break;
         case 'solar': m.status = daylight > 0.05 ? `Generating ${Math.round(daylight * 100)}%` : 'Night'; break;
         case 'storage': m.status = `${total(m.stored)}/${STORAGE_CAP} items`; break;
       }
@@ -226,8 +282,8 @@ export class Factory {
     const room = (l: Link) => { const last = l.items[l.items.length - 1]; return !last || last.t >= gapT(l); };
 
     // ---- smart splitters sort their input onto the right belts ----
-    if (!this.tripped) for (const m of this.machines) {
-      if (m.kind !== 'splitter' || total(m.input) === 0) continue;
+    for (const m of this.machines) {
+      if (m.kind !== 'splitter' || total(m.input) === 0 || this.netFor(m.id).ratio <= 0) continue;
       const type = (Object.keys(m.input) as ItemType[]).find(t => (m.input[t] ?? 0) > 0)!;
       const open = (s: Slot) => s.link !== null && this.links.some(l => l.id === s.link && room(l));
       const pick = (cands: Slot[]) => cands.find(open);
@@ -276,6 +332,30 @@ export class Factory {
 
   addFuel(id: number, wood: number): boolean { const m = this.get(id); if (!m || m.kind !== 'burner') return false; m.fuel += wood; return true; }
 
+  /** Is this a generator (burner or solar panel)? */
+  static isGenerator(k: MachineKind): boolean { return k === 'burner' || k === 'solar'; }
+
+  /** Join two things with a power line. One end must be a Power Pole. Returns the wire, or a reason it was refused. */
+  wire(a: number, b: number): Wire | string {
+    if (a === b) return 'Pick two different things';
+    const ma = a === HUB_NODE ? null : this.get(a), mb = b === HUB_NODE ? null : this.get(b);
+    if ((a !== HUB_NODE && !ma) || (b !== HUB_NODE && !mb)) return 'That machine is gone';
+    const pole = (m: Machine | null | undefined) => !!m && m.kind === 'pole';
+    if (!pole(ma) && !pole(mb)) return 'Power lines go through a Power Pole';
+    if (this.wires.some(w => (w.a === a && w.b === b) || (w.a === b && w.b === a))) return 'Already connected';
+    for (const m of [ma, mb]) if (m && m.kind === 'pole' && this.wires.filter(w => w.a === m.id || w.b === m.id).length >= POLE_PORTS) return `A pole holds ${POLE_PORTS} lines`;
+    const w: Wire = { id: this.nextId++, a, b };
+    this.wires.push(w);
+    return w;
+  }
+
+  removeWire(id: number): boolean { const n = this.wires.length; this.wires = this.wires.filter(w => w.id !== id); return this.wires.length < n; }
+
+  /** The power network a machine sits on (for the machine panel). */
+  netFor(id: number): PowerNet { return this.netOf.get(id) ?? { supply: 0, demand: 0, ratio: 0, tripped: false }; }
+  /** How many wires touch this machine. */
+  wireCount(id: number): number { return this.wires.filter(w => w.a === id || w.b === id).length; }
+
   /** Empty a storage box. */
   takeAll(id: number): Buf {
     const m = this.get(id);
@@ -305,6 +385,7 @@ export class Factory {
       nextId: this.nextId, tokens: this.tokens,
       machines: this.machines.map(m => ({ id: m.id, kind: m.kind, x: m.x, y: m.y, z: m.z, yaw: m.yaw, ore: m.ore, input: { ...m.input }, output: { ...m.output }, stored: { ...m.stored }, fuel: m.fuel, clock: m.clock, slots: m.slots.map(s => ({ ...s })), job: m.job ? { ...m.job } : null, prog: m.prog })),
       links: this.links.map(l => ({ id: l.id, from: l.from, to: l.to, length: l.length, slot: l.slot, items: l.items.map(i => ({ ...i })) })),
+      wires: this.legacyGrid ? undefined : this.wires.map(w => ({ ...w })), tripped: [...this.breaker],
       cfg: { minerMult: this.minerMult, alt: { ...this.alt }, roofSolar: this.roofSolar, reactor: this.reactor, tripped: this.tripped },
     };
   }
@@ -313,7 +394,7 @@ export class Factory {
    * Multiplayer: bring this factory in line with the host's snapshot without recreating what already exists.
    * Returns what appeared and disappeared so the caller can add or remove meshes and colliders.
    */
-  applyState(s: FactoryState): { addedM: Machine[]; removedM: Machine[]; addedL: Link[]; removedL: Link[] } {
+  applyState(s: FactoryState): { addedM: Machine[]; removedM: Machine[]; addedL: Link[]; removedL: Link[]; addedW: Wire[]; removedW: Wire[] } {
     const keepM = new Set(s.machines.map(m => m.id)), keepL = new Set(s.links.map(l => l.id));
     const removedM = this.machines.filter(m => !keepM.has(m.id)), removedL = this.links.filter(l => !keepL.has(l.id));
     this.machines = this.machines.filter(m => keepM.has(m.id)); this.links = this.links.filter(l => keepL.has(l.id));
@@ -330,9 +411,14 @@ export class Factory {
       if (!l) { l = { id: d.id, from: d.from, to: d.to, length: d.length, slot: d.slot ?? -1, items: [] }; this.links.push(l); addedL.push(l); }
       l.items = (d.items ?? []).map(i => ({ ...i }));
     }
+    this.legacyGrid = s.wires === undefined;
+    const have = new Set(this.wires.map(w => w.id)), want = new Set((s.wires ?? []).map(w => w.id));
+    const removedW = this.wires.filter(w => !want.has(w.id));
+    const addedW = (s.wires ?? []).filter(w => !have.has(w.id)).map(w => ({ ...w }));
+    this.wires = (s.wires ?? []).map(w => ({ ...w })); this.breaker = new Set(s.tripped ?? []);
     this.nextId = Math.max(this.nextId, s.nextId); this.tokens = s.tokens ?? 0;
     if (s.cfg) { this.minerMult = s.cfg.minerMult; this.alt = { ...s.cfg.alt }; this.roofSolar = s.cfg.roofSolar; this.reactor = s.cfg.reactor; this.tripped = s.cfg.tripped; }
-    return { addedM, removedM, addedL, removedL };
+    return { addedM, removedM, addedL, removedL, addedW, removedW };
   }
 
   load(s: FactoryState): void {
@@ -345,5 +431,7 @@ export class Factory {
     }
     this.nextId = s.nextId;
     for (const l of s.links) this.links.push({ id: l.id, from: l.from, to: l.to, length: l.length, slot: l.slot ?? -1, items: (l.items ?? []).map(i => ({ ...i })) });
+    this.legacyGrid = s.wires === undefined;
+    this.wires = (s.wires ?? []).map(w => ({ ...w })); this.breaker = new Set(s.tripped ?? []);
   }
 }

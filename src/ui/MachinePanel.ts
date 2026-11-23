@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { Screen } from './Screen';
-import { Factory, Machine, MACHINE_NAME, ITEM_NAME, ItemType, STORAGE_CAP, SLOT_NAMES, MAX_CLOCK, ITEM_VALUE } from '../game/Factory';
+import { Factory, Machine, MACHINE_NAME, ITEM_NAME, ItemType, STORAGE_CAP, SLOT_NAMES, MAX_CLOCK, ITEM_VALUE, POLE_PORTS } from '../game/Factory';
 
 const W = 640, H = 470;
-export type MachineAction = 'fuel' | 'take' | 'remove' | 'overclock' | 'reset' | 'tokens' | 'filter';
+export type MachineAction = 'fuel' | 'take' | 'remove' | 'overclock' | 'reset' | 'tokens' | 'filter' | 'unwire';
 
 interface Btn { label: string; action: MachineAction; x: number; y: number; w: number; h: number; arg?: number; danger?: boolean }
 
@@ -61,10 +61,10 @@ export class MachinePanel extends Screen {
   }
 
   private draw(m: Machine): void {
-    const f = this.factory, { ctx } = this;
+    const f = this.factory, { ctx } = this, net = f.netFor(m.id), lines0 = f.wireCount(m.id);
     ctx.textAlign = 'left';
     ctx.fillStyle = '#0a0f1f'; ctx.fillRect(0, 0, W, H);
-    ctx.strokeStyle = f.tripped ? '#ff4040' : '#ffb347'; ctx.lineWidth = 6; ctx.strokeRect(4, 4, W - 8, H - 8);
+    ctx.strokeStyle = net.tripped ? '#ff4040' : '#ffb347'; ctx.lineWidth = 6; ctx.strokeRect(4, 4, W - 8, H - 8);
     ctx.fillStyle = '#ffb347'; ctx.font = 'bold 38px monospace'; ctx.fillText(MACHINE_NAME[m.kind], 24, 52);
     if (m.ore) { ctx.textAlign = 'right'; ctx.fillStyle = m.ore.purity >= 2 ? '#6fe39a' : m.ore.purity < 1 ? '#ff9a6a' : '#cfd8e8'; ctx.font = 'bold 22px monospace'; ctx.fillText(`${m.ore.purity >= 2 ? 'PURE' : m.ore.purity < 1 ? 'IMPURE' : 'NORMAL'} ${m.ore.type} node x${m.ore.purity}`, W - 24, 48); ctx.textAlign = 'left'; }
     const bad = /power|fuel|not on|tripped/i.test(m.status) && !/Low/.test(m.status), warn = /blocked|Waiting|Low|Night|Standby/.test(m.status);
@@ -76,6 +76,7 @@ export class MachinePanel extends Screen {
     const row2 = 396;
     if (m.kind === 'burner') lines.push(`Fuel: ${m.fuel.toFixed(1)} wood  (1 wood = 20 s)`, `Makes 1.0 MW`);
     else if (m.kind === 'solar') lines.push(`Makes up to 0.6 MW, by day`);
+    else if (m.kind === 'pole') lines.push(`Power lines: ${lines0} / ${POLE_PORTS}`, `Wire it to a burner and to machines`);
     else if (m.kind === 'storage') lines.push(`Holds: ${list(m.stored)}`, `Capacity ${STORAGE_CAP}`);
     else if (m.kind === 'sink') lines.push(`Shredding: ${list(m.input)}`, `Tokens ready: ${f.tokens}  (plate ${ITEM_VALUE.plate}, wire ${ITEM_VALUE.wire}, ingot ${ITEM_VALUE.ironIngot}, ore ${ITEM_VALUE.ironOre})`);
     else if (m.kind === 'splitter') {
@@ -88,7 +89,7 @@ export class MachinePanel extends Screen {
       });
     } else lines.push(`Rate: ${f.perMin(m).toFixed(0)} per minute`, `In: ${list(m.input)}`, `Out: ${list(m.output)}`);
     if (['miner', 'smelter', 'constructor', 'sink'].includes(m.kind)) lines.push(`Clock: ${Math.round(m.clock * 100)}%  (max ${MAX_CLOCK * 100}%)`);
-    lines.push(`Grid: ${f.power.supply.toFixed(1)} / ${f.power.demand.toFixed(1)} MW  (${Math.round(f.power.ratio * 100)}%)`);
+    lines.push(f.legacyGrid || lines0 > 0 || m.kind === 'burner' || m.kind === 'solar' ? `Grid: ${net.supply.toFixed(1)} / ${net.demand.toFixed(1)} MW  (${Math.round(net.ratio * 100)}%)` : 'Not on a power line yet');
     const y0 = m.kind === 'splitter' ? 150 + 3 * 62 : 134;
     ctx.fillStyle = '#d8e8f0'; ctx.font = '22px monospace';
     if (m.kind !== 'splitter') lines.forEach((l, i) => ctx.fillText(l, 24, y0 + i * 32));
@@ -97,7 +98,8 @@ export class MachinePanel extends Screen {
     // buttons
     let x = 24;
     const add = (label: string, action: MachineAction, w = 180, danger = false) => { this.btns.push({ label, action, x, y: row2, w, h: 58, danger }); x += w + 16; };
-    if (f.tripped) add('RESET BREAKER', 'reset', 250);
+    if (net.tripped) add('RESET BREAKER', 'reset', 250);
+    if (lines0 > 0 && !f.legacyGrid) add('CUT LINES', 'unwire', 170);
     if (m.kind === 'burner') add('+5 WOOD', 'fuel');
     if (m.kind === 'storage') add('TAKE ALL', 'take');
     if (m.kind === 'sink') add(`TOKENS ${f.tokens}`, 'tokens');
