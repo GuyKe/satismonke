@@ -319,10 +319,10 @@ export class MenuPanel extends Screen {
     if (this.page === 'inventory') {
       const tiles = this.h.inventory();
       tiles.forEach((t, i) => {
-        const x = 24 + (i % 5) * 152, y = 84 + Math.floor(i / 5) * 72;
-        ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, y, 146, 64); ctx.strokeStyle = t.value > 0 ? t.color : '#2a3550'; ctx.lineWidth = 2; ctx.strokeRect(x, y, 146, 64);
-        ctx.textAlign = 'left'; ctx.fillStyle = t.value > 0 ? t.color : '#5a6578'; ctx.font = 'bold 15px monospace'; ctx.fillText(t.label, x + 8, y + 20);
-        ctx.textAlign = 'right'; ctx.fillStyle = t.value > 0 ? '#fff' : '#5a6578'; ctx.font = 'bold 30px monospace'; ctx.fillText(String(t.value), x + 138, y + 54);
+        const x = 24 + (i % 6) * 127, y = 84 + Math.floor(i / 6) * 72;
+        ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, y, 121, 64); ctx.strokeStyle = t.value > 0 ? t.color : '#2a3550'; ctx.lineWidth = 2; ctx.strokeRect(x, y, 121, 64);
+        ctx.textAlign = 'left'; ctx.fillStyle = t.value > 0 ? t.color : '#5a6578'; ctx.font = 'bold 14px monospace'; ctx.fillText(t.label, x + 7, y + 19);
+        ctx.textAlign = 'right'; ctx.fillStyle = t.value > 0 ? '#fff' : '#5a6578'; ctx.font = 'bold 28px monospace'; ctx.fillText(String(t.value), x + 114, y + 54);
       });
       ctx.textAlign = 'left'; ctx.fillStyle = '#9ab'; ctx.font = 'bold 18px monospace'; ctx.fillText('TOOLS: click one, then click the two things to join', 24, 306);
       ctx.textAlign = 'center';

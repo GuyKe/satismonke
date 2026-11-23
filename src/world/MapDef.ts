@@ -27,6 +27,10 @@ export interface MapDef {
   treeHits?: number;
   /** Open fields cut out of the forest (jungle). */
   clearings?: number;
+  /** Bushes to pick biomass from (1 = the plains' amount), and their colours. */
+  bushes: number; bushPalette: number[];
+  /** Ore node rarity: below the first number is impure, below the second normal, the rest pure. */
+  purity: [number, number];
   trees: number; treeGap: number; clusters: number; boulders: number; ores: number; crystals: number; mush: number; grass: number; sites: number; animals: number;
   // ---- colours ----
   groundA: number; groundB: number; sand: number; dirt: [number, number, number];
@@ -70,6 +74,7 @@ export const MAPS: Record<MapId, MapDef> = {
     id: 'plains', name: 'GRASSY PLAINS', blurb: ['Rolling purple-pink fields,', 'lakes and a few forests.'], seed: 7,
     ratings: { difficulty: 2, space: 4, resources: 3 },
     hills: 1, base: 0, ridge: 17, canyons: 0, lakes: PLAINS_LAKES, ponds: PLAINS_PONDS, rivers: PLAINS_RIVERS,
+    bushes: 1, bushPalette: [0xd04fb8, 0x9a5fe0, 0x3fc7b4, 0xe86aa0], purity: [0.45, 0.92],
     trees: 1, treeGap: 9, clusters: 1, boulders: 1, ores: 1, crystals: 1, mush: 1, grass: 1, sites: 1, animals: 1,
     groundA: 0xc650b4, groundB: 0x8a4acc, sand: 0xe6b4d8, dirt: [0.66, 0.44, 0.32],
     grassHsl: [0.76, 0.2, 0.55, 0.42],
@@ -83,6 +88,7 @@ export const MAPS: Record<MapId, MapDef> = {
     lakes: [{ x: 0, z: -560, r: 250, depth: 20 }, { x: -430, z: 170, r: 110, depth: 15 }, { x: 420, z: 300, r: 100, depth: 14 }],
     ponds: PLAINS_PONDS.filter((_, i) => i % 2 === 0).map(p => ({ ...p, r: p.r * 0.7 })),
     rivers: PLAINS_RIVERS.map(r => ({ ...r, width: r.width * 0.65 })),
+    bushes: 1.1, bushPalette: [0x1f9d62, 0x2fb870, 0x7fe05a, 0x0f6b4a], purity: [0.2, 0.7],
     treeHits: 6, clearings: 10,
     trees: 39, treeGap: 2.8, clusters: 6.5, boulders: 2, ores: 2.4, crystals: 2.2, mush: 1.6, grass: 1.2, sites: 1.5, animals: 1.2,
     groundA: 0x2fb870, groundB: 0x178a5a, sand: 0x6a8a52, dirt: [0.34, 0.26, 0.16],
@@ -96,6 +102,7 @@ export const MAPS: Record<MapId, MapDef> = {
     hills: 2.3, base: 2.5, ridge: 14, canyons: 0,
     lakes: PLAINS_LAKES.map(l => ({ ...l, r: l.r * 1.1 })), ponds: oases(),
     rivers: PLAINS_RIVERS.slice(0, 2).map(r => ({ ...r, width: r.width * 1.1 })),
+    bushes: 0.3, bushPalette: [0x9bbf5a, 0xc8a050, 0x6fa05a, 0xd8b45a], purity: [0.55, 0.92],
     trees: 0.2, treeGap: 22, clusters: 0.3, boulders: 0.55, ores: 0.42, crystals: 0.5, mush: 0.25, grass: 0.12, sites: 0.7, animals: 0.7,
     groundA: 0xf2d08c, groundB: 0xdcaa5e, sand: 0xf3dca8, dirt: [0.82, 0.62, 0.38],
     grassHsl: [0.12, 0.05, 0.5, 0.5],

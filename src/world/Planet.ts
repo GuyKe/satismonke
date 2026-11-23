@@ -28,6 +28,7 @@ export const CRYSTAL_OWNER = 300000;
 export const ORE_OWNER = 400000;
 export const MACHINE_OWNER = 500000;
 export const CRASH_OWNER = 700000;
+export const BUSH_OWNER = 800000;
 
 /** Ore deposits: colour, punches to break by hand, and how much they give. */
 export const ORE_DEF: Record<Ore, { color: number; rock: number; hits: number; yield: [number, number]; glow: number }> = {
@@ -37,7 +38,7 @@ export const ORE_DEF: Record<Ore, { color: number; rock: number; hits: number; y
   plasma: { color: 0xc04dff, rock: 0x362b48, hits: 4, yield: [1, 1], glow: 1.4 },
   uranium: { color: 0x7dff5a, rock: 0x233323, hits: 4, yield: [1, 2], glow: 1.5 },
 };
-interface OreRec { type: Ore; x: number; y: number; z: number; r: number; hits: number; broken: boolean; slot: number; purity: number; matrix: THREE.Matrix4 }
+interface OreRec { type: Ore; x: number; y: number; z: number; r: number; hits: number; broken: boolean; slot: number; purity: number; matrix: THREE.Matrix4; /** Slot of the gold marker above a pure node (-1 = none). */ mark: number }
 /** Trees and rocks (boulders and ore deposits) grow back this long after they are used up. */
 export const RESPAWN_SECONDS = 300;
 export type Loot = Partial<Record<'steel' | 'plate' | 'wire' | 'crystal' | 'core' | 'drive' | 'artifact', number>>;
@@ -153,7 +154,8 @@ const hash3 = (x: number, y: number, z: number) => { const s = Math.sin(x * 12.9
 
 /** The alien planet: rolling hills, lakes, spaced trees, crystals, floating rocks, strange animals, Saturn as the sun. */
 /** Things that can be used up and are shared between players in a lobby. */
-export type Harvest = 'tree' | 'boulder' | 'crystal' | 'ore' | 'site';
+export type Harvest = 'tree' | 'boulder' | 'crystal' | 'ore' | 'site' | 'bush';
+interface BushRec { x: number; y: number; z: number; r: number; picked: boolean; matrix: THREE.Matrix4 }
 
 export class Planet {
   readonly group = new THREE.Group();
@@ -176,7 +178,7 @@ export class Planet {
   private canopyMesh!: THREE.InstancedMesh;
   private pineMesh!: THREE.InstancedMesh;
   /** What is waiting to grow back, oldest first. */
-  private respawnQ: { kind: 'tree' | 'boulder' | 'ore'; i: number; at: number }[] = [];
+  private respawnQ: { kind: 'tree' | 'boulder' | 'ore' | 'bush'; i: number; at: number }[] = [];
   private respawnClock = 0;
   /** A tree or rock grew back (multiplayer forgets it was used up). */
   onRespawn: ((kind: Harvest, index: number) => void) | null = null;
@@ -201,19 +203,24 @@ export class Planet {
   private beaconOn = false;
   private skyDome!: THREE.Mesh;
   private dayF = 1;
+  private bushRecs: BushRec[] = [];
+  private bushMesh!: THREE.InstancedMesh;
+  private pureMarks!: THREE.InstancedMesh;
   private oreMeshes = {} as Record<Ore, { rock: THREE.InstancedMesh; specks: THREE.InstancedMesh }>;
   private mesaTops: number[] = [];
   /** Where the pod was placed (kept so a save can put it back). */
   private podHead = new THREE.Vector3();
   private podForward = new THREE.Vector3(0, 0, -1);
   /** An ore deposit broke. */
-  onOre: ((type: Ore, amount: number, pos: THREE.Vector3) => void) | null = null;
+  onOre: ((type: Ore, amount: number, pos: THREE.Vector3, purity: number) => void) | null = null;
   private crystalRecs: CrystalRec[] = [];
   private crystalMesh!: THREE.InstancedMesh;
   private wobbling: { rec: TreeRec; t: number; axis: THREE.Vector3 }[] = [];
   private propList: { kind: PropKind; x: number; z: number; mesh: PropMesh }[] = [];
   /** Crystal broke: here is the amount. */
   onCrystal: ((amount: number, pos: THREE.Vector3) => void) | null = null;
+  /** Picked a bush: biomass for the burners. */
+  onBiomass: ((amount: number, pos: THREE.Vector3) => void) | null = null;
   private boulderRecs: BoulderRec[] = [];
   private boulderMesh!: THREE.InstancedMesh;
   private debris: { mesh: THREE.Mesh; vel: THREE.Vector3; spin: THREE.Vector3; t: number; life: number }[] = [];
@@ -281,6 +288,7 @@ export class Planet {
     this.buildCrashSites(rng);
     this.buildFloatingRocks(rng);
     this.buildMushrooms(rng);
+    this.buildBushes(rngFrom(seed ^ 0x5bd1e995));   // its own random stream: the rest of the world stays as it was
     this.buildMountains(rng);
     this.buildAnimals(rng);
     this.world.finalize();
@@ -630,11 +638,17 @@ export class Planet {
         rock.setMatrixAt(k, m); specks.setMatrixAt(k, m);
         this.world.addSphere(new THREE.Vector3(s.x, s.y + s.r * 0.35, s.z), s.r * 0.85, 0.3, ORE_OWNER + slot);
         const pr = rng();
-        this.oreRecs.push({ type, x: s.x, y: s.y, z: s.z, r: s.r, hits: 0, broken: false, slot: k, purity: pr < 0.3 ? 0.5 : pr < 0.8 ? 1 : 2, matrix: m.clone() });
+        this.oreRecs.push({ type, x: s.x, y: s.y, z: s.z, r: s.r, hits: 0, broken: false, slot: k, purity: pr < this.map.purity[0] ? 0.5 : pr < this.map.purity[1] ? 1 : 2, matrix: m.clone(), mark: -1 });
       });
       this.oreMeshes[type] = { rock, specks };
       this.group.add(rock, specks);
     }
+    // a floating gold gem over every pure node, so you can spot the good ones
+    const pures = this.oreRecs.filter(o => o.purity >= 2);
+    this.pureMarks = new THREE.InstancedMesh(new THREE.OctahedronGeometry(0.28, 0).scale(1, 1.7, 1), new THREE.MeshBasicMaterial({ color: 0xffe27a, toneMapped: false }), Math.max(1, pures.length));
+    this.pureMarks.count = pures.length; this.pureMarks.frustumCulled = false;
+    pures.forEach((o, k) => { o.mark = k; this.pureMarks.setMatrixAt(k, this.markMatrix(o)); });
+    this.group.add(this.pureMarks);
   }
 
   /** 0..1 how much daylight there is (solar panels). */
@@ -808,13 +822,21 @@ export class Planet {
     this.world.removeOwner(ORE_OWNER + i);
     this.hideOre(o);
     this.burst(at, 10, def.color, 0.2, 5);
-    const amt = def.yield[0] + Math.floor(Math.random() * (def.yield[1] - def.yield[0] + 1)) + (tool === 'iron' && o.type !== 'plasma' ? 1 : 0);
-    this.onOre?.(o.type, amt, at);
+    // impure nodes give 2 of the ore, normal 3, pure 4
+    const amt = o.purity >= 2 ? 4 : o.purity >= 1 ? 3 : 2;
+    this.onOre?.(o.type, amt, at, o.purity);
     this.onHarvest?.('ore', i); this.scheduleRespawn('ore', i);
     return 0;
   }
 
+  private markMatrix(o: OreRec): THREE.Matrix4 { return new THREE.Matrix4().makeTranslation(o.x, o.y + o.r * 1.5 + 0.9, o.z); }
+  private setMark(o: OreRec, on: boolean): void {
+    if (o.mark < 0 || !this.pureMarks) return;
+    this.pureMarks.setMatrixAt(o.mark, on ? this.markMatrix(o) : new THREE.Matrix4().makeScale(0, 0, 0)); this.pureMarks.instanceMatrix.needsUpdate = true;
+  }
+
   private hideOre(o: OreRec): void {
+    this.setMark(o, false);
     const z = new THREE.Matrix4().makeScale(0, 0, 0), mm = this.oreMeshes[o.type];
     mm.rock.setMatrixAt(o.slot, z); mm.specks.setMatrixAt(o.slot, z);
     mm.rock.instanceMatrix.needsUpdate = mm.specks.instanceMatrix.needsUpdate = true;
@@ -833,6 +855,7 @@ export class Planet {
       hub: this.hub ? { ...this.hub.pose } : null,
       props: this.propList.map(p => ({ kind: p.kind, x: p.x, z: p.z })),
       discoveredZones: [...this.zoneFound],
+      pickedBushes: this.bushRecs.flatMap((b, i) => (b.picked ? [i] : [])),
       lootedSites: ids(this.siteRecs.map(s => ({ broken: s.looted }))), discoveredSites: this.siteRecs.flatMap((s, i) => (s.discovered ? [i] : [])),
     };
   }
@@ -852,6 +875,8 @@ export class Planet {
     for (const i of s.brokenCrystals) { const c = this.crystalRecs[i]; if (!c) continue; c.broken = true; owners.add(CRYSTAL_OWNER + i); this.crystalMesh.setMatrixAt(i, zero); }
     this.crystalMesh.instanceMatrix.needsUpdate = true;
     for (const i of s.brokenOres) { const o = this.oreRecs[i]; if (!o) continue; o.broken = true; owners.add(ORE_OWNER + i); this.hideOre(o); this.scheduleRespawn('ore', i); }
+    for (const i of s.pickedBushes ?? []) { const b = this.bushRecs[i]; if (!b) continue; b.picked = true; owners.add(BUSH_OWNER + i); this.bushMesh.setMatrixAt(i, zero); this.scheduleRespawn('bush', i); }
+    this.bushMesh.instanceMatrix.needsUpdate = true;
     for (const i of s.lootedSites ?? []) { const t = this.siteRecs[i]; if (!t) continue; t.looted = true; owners.add(CRASH_OWNER + i); this.siteMesh.setMatrixAt(i, zero); this.siteLights.setMatrixAt(i, zero); }
     for (const i of s.discoveredZones ?? []) this.zoneFound.add(i);
     for (const i of s.discoveredSites ?? []) { const t = this.siteRecs[i]; if (t) t.discovered = true; }
@@ -894,6 +919,34 @@ export class Planet {
       caps.setColorAt(i, col.set(palette[i % 4]));
     }
     this.group.add(stems, caps);
+  }
+
+  /** Low bushes scattered about: punch one for biomass (leaves) to burn. They grow back. */
+  private buildBushes(rng: () => number): void {
+    const N = Math.max(40, Math.round(520 * this.q.trees * this.map.bushes));
+    this.bushMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ roughness: 0.85, flatShading: true }), N);
+    const m = new THREE.Matrix4(), col = new THREE.Color(), q = new THREE.Quaternion(), pal = this.map.bushPalette;
+    for (let i = 0; i < N; i++) {
+      const p = this.dryPoint(rng, 9, WORLD_R, ABOVE_WATER + 0.3), r = 0.55 + rng() * 0.55;
+      m.compose(new THREE.Vector3(p.x, p.h + r * 0.35, p.z), q.setFromEuler(new THREE.Euler(0, rng() * 6, 0)), new THREE.Vector3(r * 1.25, r * 0.8, r * 1.15));
+      this.bushMesh.setMatrixAt(i, m); this.bushMesh.setColorAt(i, col.set(pal[i % pal.length]).offsetHSL(0, 0, (rng() - 0.5) * 0.12));
+      this.world.addSphere(new THREE.Vector3(p.x, p.h + r * 0.4, p.z), r * 0.8, 0.5, BUSH_OWNER + i);
+      this.bushRecs.push({ x: p.x, y: p.h, z: p.z, r, picked: false, matrix: m.clone() });
+    }
+    this.group.add(this.bushMesh);
+  }
+
+  /** Pick a bush: biomass for the burners. Returns false if it was already picked. */
+  hitBush(i: number): boolean {
+    const b = this.bushRecs[i];
+    if (!b || b.picked) return false;
+    b.picked = true; this.world.removeOwner(BUSH_OWNER + i);
+    this.bushMesh.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); this.bushMesh.instanceMatrix.needsUpdate = true;
+    const at = new THREE.Vector3(b.x, b.y + b.r * 0.6, b.z);
+    this.burst(at, 7, 0x7fe05a, 0.14, 3);
+    this.onBiomass?.(3, at);
+    this.onHarvest?.('bush', i); this.scheduleRespawn('bush', i);
+    return true;
   }
 
   /** Rugged snow-capped peaks on the horizon. */
@@ -989,11 +1042,17 @@ export class Planet {
   get cycleTime(): number { return this.clock % CYCLE; }
   get isDay(): boolean { return this.cycleTime < DAY_SECONDS; }
 
-  private scheduleRespawn(kind: 'tree' | 'boulder' | 'ore', i: number): void { this.respawnQ.push({ kind, i, at: this.respawnClock + RESPAWN_SECONDS }); }
+  private scheduleRespawn(kind: 'tree' | 'boulder' | 'ore' | 'bush', i: number): void { this.respawnQ.push({ kind, i, at: this.respawnClock + RESPAWN_SECONDS }); }
 
   /** Grow one used-up tree or rock back, unless the player is standing right there. Returns false to try again later. */
-  private respawn(e: { kind: 'tree' | 'boulder' | 'ore'; i: number }, head: THREE.Vector3): boolean {
-    if (e.kind === 'tree') {
+  private respawn(e: { kind: 'tree' | 'boulder' | 'ore' | 'bush'; i: number }, head: THREE.Vector3): boolean {
+    if (e.kind === 'bush') {
+      const b = this.bushRecs[e.i]; if (!b || !b.picked) return true;
+      if (Math.hypot(head.x - b.x, head.z - b.z) < b.r + 3) return false;
+      b.picked = false; this.bushMesh.setMatrixAt(e.i, b.matrix); this.bushMesh.instanceMatrix.needsUpdate = true;
+      this.world.addSphere(new THREE.Vector3(b.x, b.y + b.r * 0.4, b.z), b.r * 0.8, 0.5, BUSH_OWNER + e.i);
+      this.burst(new THREE.Vector3(b.x, b.y + b.r * 0.5, b.z), 4, 0x7fe05a, 0.1, 2);
+    } else if (e.kind === 'tree') {
       const r = this.treeRecs[e.i]; if (!r || !r.felled) return true;
       if (Math.hypot(head.x - r.x, head.z - r.z) < 6) return false;
       r.felled = false; r.hits = 0; r.lastHit = -99;
@@ -1013,7 +1072,7 @@ export class Planet {
       const o = this.oreRecs[e.i]; if (!o || !o.broken) return true;
       if (Math.hypot(head.x - o.x, head.z - o.z) < o.r + 4) return false;
       o.broken = false; o.hits = 0;
-      const mm = this.oreMeshes[o.type]; mm.rock.setMatrixAt(o.slot, o.matrix); mm.specks.setMatrixAt(o.slot, o.matrix);
+      const mm = this.oreMeshes[o.type]; mm.rock.setMatrixAt(o.slot, o.matrix); mm.specks.setMatrixAt(o.slot, o.matrix); this.setMark(o, true);
       mm.rock.instanceMatrix.needsUpdate = mm.specks.instanceMatrix.needsUpdate = true;
       this.world.addSphere(new THREE.Vector3(o.x, o.y + o.r * 0.35, o.z), o.r * 0.85, 0.3, ORE_OWNER + e.i);
       this.burst(new THREE.Vector3(o.x, o.y + o.r * 0.6, o.z), 5, ORE_DEF[o.type].color, 0.16, 3);
@@ -1350,6 +1409,10 @@ export class Planet {
       this.trunkMesh.setMatrixAt(r.trunkIdx, zero); this.trunkMesh.instanceMatrix.needsUpdate = true;
       const fol = r.pine ? this.pineMesh : this.canopyMesh; fol.setMatrixAt(r.foliageIdx, zero); fol.instanceMatrix.needsUpdate = true;
       this.burst(new THREE.Vector3(r.x, r.y + 2, r.z), 6, r.color, 0.2, 4); this.scheduleRespawn('tree', i);
+    } else if (kind === 'bush') {
+      const b = this.bushRecs[i]; if (!b || b.picked) return;
+      b.picked = true; this.world.removeOwner(BUSH_OWNER + i); this.bushMesh.setMatrixAt(i, zero); this.bushMesh.instanceMatrix.needsUpdate = true;
+      this.burst(new THREE.Vector3(b.x, b.y + b.r * 0.6, b.z), 5, 0x7fe05a, 0.12, 3); this.scheduleRespawn('bush', i);
     } else if (kind === 'boulder') {
       const b = this.boulderRecs[i]; if (!b || b.broken) return;
       b.broken = true; this.world.removeOwner(BOULDER_OWNER + i);

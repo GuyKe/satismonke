@@ -71,6 +71,7 @@ export const D: Record<string, Set> = {
   mediaComputer: [[V('A media computer. Music, and videos of yourself. Halcyon would like it noted that it has never seen a monke produce content, only consume it.')]],
   cameraFirst: [[V('A camera. Stand in front of it and press record. Please do not do anything you would not want played back to the entire planet.')]],
   published: [[V('Published. Your video is now available to everyone who matters, and a few who do not.')], [V('Your clip is out there now. Halcyon takes no responsibility for the comments.')]],
+  firstBiomass: [[V('Biomass. Leaves, twigs and hope, compressed. Feed it to a burner and it becomes electricity, which is the only honest thing this company has ever made.')]],
   burnerFueled: [[V('Fuel loaded. Please stand back. Or forward. Nobody has the data.')]],
   fuelOut: [[V('The burner has gone out. The grid is unimpressed.')], [V('Out of fuel. Wood does not grow on belts, though Halcyon is exploring it.')]],
   powerLow: [[V('Power demand is exceeding supply. Machines are slowing down in solidarity.')], [V('Grid strain detected. Consider a larger generator, or smaller ambitions.')]],
