@@ -23,6 +23,16 @@ const bad = await p.evaluate(() => {
       audit(`${kind}${trip ? '/tripped' : ''}${wired ? '/wired' : ''}`, mp.btns, 640, 470);
     }
   }
+  // the media computer and the camera panel
+  g.placeHubNow(0, -30, 0); const media = g.hubUi.media, cam = g.hubUi.cam;
+  audit('camera', cam.btns, 640, 540);
+  const fakeThumb = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/yQALCAABAAEBAREA/8wABgAQEAX/2gAIAQEAAD8A0s8g/9k=';
+  media.list = Array.from({ length: 5 }, (_, i) => ({ id: 'x' + i, author: 'a', color: 1, title: 't', caption: '', fps: 8, created: 0, thumb: fakeThumb, frameCount: 8 }));
+  for (const page of ['home', 'music']) { media.go(page); audit('media/' + page, media.btns, 800, 500); }
+  for (const tab of ['lobby', 'global', 'mine']) { media.tab = tab; media.go('list'); audit('media/list/' + tab, media.btns, 800, 500); }
+  media.cur = { id: 'c', author: 'a', color: 1, title: 't', caption: '', fps: 8, created: 0, frames: [fakeThumb, fakeThumb, fakeThumb] };
+  for (const src of ['mine', 'lobby', 'global']) { media.curSource = src; media.go('player'); audit('media/player/' + src, media.btns, 800, 500); }
+  media.ed = { from: 0, to: 3, reverse: false, filter: 0, caption: 0, fps: 8 }; media.go('edit'); audit('media/edit', media.btns, 800, 500);
   return out;
 });
 console.log(bad.length ? bad.join('\n') : 'all machine-panel buttons fit and none overlap', errs);

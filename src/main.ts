@@ -15,6 +15,11 @@ import { Voice } from './net/Voice';
 import { setMap } from './world/Terrain';
 import { MapId, isMapId } from './world/MapDef';
 import { LoadingScreen } from './ui/LoadingScreen';
+import { MediaScreen, MediaHost } from './ui/MediaScreen';
+import { CameraPanel } from './ui/CameraPanel';
+import { Music } from './audio/Music';
+import { Clip, clipStore } from './media/Clip';
+import { globalFeed } from './media/GlobalFeed';
 import { Look, loadLook, saveLook } from './game/Cosmetics';
 import { RemotePlayers } from './world/RemotePlayers';
 import { PlayerModel } from './world/PlayerModel';
@@ -162,7 +167,7 @@ async function boot() {
   let placing: 'hub' | PropKind | MachineKind | null = null;
   let ghost: { group: THREE.Group } | null = null;
   let ghostPose: { x: number; z: number; y: number; yaw: number; ok: boolean; reason: string } | null = null;
-  let hubUi: { bench: RecipePanel; computer: ComputerScreen; upgrades: RecipePanel; research: RecipePanel } | null = null;
+  let hubUi: { bench: RecipePanel; computer: ComputerScreen; upgrades: RecipePanel; research: RecipePanel; media: MediaScreen; cam: CameraPanel; mediaCam: THREE.PerspectiveCamera; mediaAt: THREE.Vector3 } | null = null;
 
   // ---- Building: foundations, walls and catwalks ----
   let buildSystem: BuildSystem | null = null;
@@ -286,7 +291,12 @@ async function boot() {
     upgrades.mesh.position.copy(built.mesh.upgradeScreenAt); research.mesh.position.copy(built.mesh.researchScreenAt);
     upgrades.mesh.rotation.y = Math.PI; research.mesh.rotation.y = Math.PI; // they hang on the front wall, facing in
     built.group.add(upgrades.mesh, research.mesh);
-    hubUi = { bench, computer, upgrades, research };
+    // the media computer (music, videos) and the tripod camera with its control panel
+    const media = new MediaScreen(mediaHost), cam = new CameraPanel(() => ({ name: net.me.name, color: net.me.color }), c => { void saveClip(c); first('cameraFirst'); });
+    media.mesh.position.copy(built.mesh.mediaScreenAt); cam.mesh.position.copy(built.mesh.camPanelAt);
+    const mediaCam = new THREE.PerspectiveCamera(62, 16 / 9, 0.1, 600); mediaCam.position.copy(built.mesh.camEye); mediaCam.lookAt(built.mesh.camLook);
+    built.group.add(media.mesh, cam.mesh, mediaCam);
+    hubUi = { bench, computer, upgrades, research, media, cam, mediaCam, mediaAt: built.mesh.mediaScreenAt.clone() };
   };
 
   /** Rebuild machines and belts from a save. */
@@ -366,7 +376,7 @@ async function boot() {
   const resetGame = () => {
     if (planet) { scene.remove(planet.group); disposeObject(planet.group); planet = null; }
     scene.fog = null; scene.background = new THREE.Color(0x05070d);
-    progress.reset(); placing = null;
+    progress.reset(); placing = null; music.stop(true);
     if (ghost) { scene.remove(ghost.group); ghost = null; }
     ghostPose = null; hubUi = null;
     health.reset(); overlay.setTint(0, 0); factory.reset(); factoryView = null; buildSystem = null; setBuild(false); narrator.clearTold(); lastPhase = 'day'; knownSites = 0; hubSeen = false; idleT = 120; machinePanel.show(null); linkMode = false; linkFrom = null; selectedMachine = null; hoveredMachine = null;
@@ -503,6 +513,22 @@ async function boot() {
     net.seedWorld(ev);
   };
 
+  // ---- Media computer: music, clips, and the camera ----
+  const music = new Music();
+  music.onChange = id => net.sendMusic(id);
+  net.onMusic = id => { if (id) music.play(id, true); else music.stop(true); };
+  net.onClip = c => { toast(`${c.author} shared a clip: see the media computer`, headPos()); };
+  const saveClip = async (c: Clip) => { try { await clipStore.put(c); toast('Clip saved: find it on the media computer', headPos()); } catch { toast('Could not save the clip', headPos()); } };
+  const mediaHost: MediaHost = {
+    music, me: () => ({ name: net.me.name, color: net.me.color }),
+    mine: () => clipStore.all(), saveClip, deleteClip: id => clipStore.delete(id),
+    lobbyClips: () => net.lobbyClips, inLobby: () => net.state === 'lobby' || net.state === 'game',
+    publishLobby: c => { net.sendClip(c); first('published'); },
+    globalConfigured: () => globalFeed.configured, globalList: () => globalFeed.list(), globalGet: id => globalFeed.get(id),
+    globalPublish: async c => { await globalFeed.publish(c); first('published'); }, globalReport: id => globalFeed.report(id),
+    say: t => toast(t, headPos()),
+  };
+
   // ---- Loading screen: shown while a world is being built ----
   let look: Look = loadLook(net.me.color);
   net.me.color = look.fur; net.me.look = { suit: look.suit, hat: look.hat, badge: look.badge };
@@ -629,6 +655,9 @@ async function boot() {
   // You see your own pioneer: body, arms and fists (no head, it is where your eyes are).
   let selfModel = new PlayerModel(look.fur, { head: false, suit: look.suit, hat: look.hat, badge: look.badge });
   scene.add(selfModel.group);
+  // the full you (head and all), shown only to the recording camera
+  let selfFull = new PlayerModel(look.fur, { suit: look.suit, hat: look.hat, badge: look.badge });
+  selfFull.visible = false; scene.add(selfFull.group);
   // a mannequin of your pioneer next to the main menu: it turns, waves and shows your look
   let preview = new PlayerModel(look.fur, { suit: look.suit, hat: look.hat, badge: look.badge });
   const previewG = new THREE.Group(); previewG.add(preview.group); previewG.position.set(1.75, 1.45, -1.5); previewG.scale.setScalar(1.15); menuRoom.group.add(previewG);
@@ -638,6 +667,8 @@ async function boot() {
     net.me.color = look.fur; net.me.look = { suit: look.suit, hat: look.hat, badge: look.badge };
     scene.remove(selfModel.group); disposeObject(selfModel.group);
     selfModel = new PlayerModel(look.fur, { head: false, suit: look.suit, hat: look.hat, badge: look.badge }); scene.add(selfModel.group);
+    scene.remove(selfFull.group); disposeObject(selfFull.group);
+    selfFull = new PlayerModel(look.fur, { suit: look.suit, hat: look.hat, badge: look.badge }); selfFull.visible = false; scene.add(selfFull.group);
     previewG.remove(preview.group); disposeObject(preview.group);
     preview = new PlayerModel(look.fur, { suit: look.suit, hat: look.hat, badge: look.badge }); previewG.add(preview.group);
     loading.setLook(look);
@@ -1009,6 +1040,10 @@ async function boot() {
     }
     rig.position.copy(player.position);
 
+    { // keep the full avatar posed where you are (it is only drawn for the recording camera)
+      const hq = camera.getWorldQuaternion(new THREE.Quaternion()), he = new THREE.Euler().setFromQuaternion(hq, 'YXZ');
+      selfFull.setPose(new THREE.Vector3().copy(player.position).add(camera.position), he.y, he.x, he.z, player.hands[0].world, player.hands[1].world, dt);
+    }
     selfModel.visible = inXR;
     if (inXR) {
       const hq = camera.getWorldQuaternion(new THREE.Quaternion()), he = new THREE.Euler().setFromQuaternion(hq, 'YXZ');
@@ -1098,13 +1133,14 @@ async function boot() {
       if (floating === 'craft') targets.push(craftPanel);
       if (buildActive) targets.push(buildPanel);
       if (machinePanel.mesh.visible && !linkMode) targets.push(machinePanel);   // while joining things, the status card must never swallow a click
-      if (hubUi && planet?.hub && Math.hypot(planet.hub.pose.x - headW.x, planet.hub.pose.z - headW.z) < 14) targets.push(hubUi.bench, hubUi.computer, hubUi.upgrades, hubUi.research);
+      if (hubUi && planet?.hub && Math.hypot(planet.hub.pose.x - headW.x, planet.hub.pose.z - headW.z) < 14) targets.push(hubUi.bench, hubUi.computer, hubUi.upgrades, hubUi.research, hubUi.media, hubUi.cam);
     }
     const meshes = targets.map(t => t.mesh);
     const setHover = (pointer: number, hit: { index: number; uv: THREE.Vector2 } | null) => {
       targets.forEach((t, k) => t.hover(pointer, hit && hit.index === k ? hit.uv : null));
       hoverTarget[pointer] = hit ? targets[hit.index] : null;
       if (hit && hubUi && targets[hit.index] === hubUi.bench) progress.benchOpened = true;
+      if (hit && hubUi && targets[hit.index] === hubUi.media) first('mediaComputer');
     };
     if (inXR) lasers.forEach((l, i) => setHover(i, l.castMany(meshes, !!placing || settings.laserAlways)));
     else {
@@ -1188,7 +1224,12 @@ async function boot() {
       panel.lookAt(headW);
       if (floating === 'map') { map.friends = remotes.positions; map.update(dt, planet, headW.x, headW.z, fwd.x, fwd.z); } else craftPanel.update();
     }
-    if (hubUi) { hubUi.bench.update(); hubUi.computer.update(dt); hubUi.upgrades.update(); hubUi.research.update(); }
+    if (hubUi) {
+      hubUi.bench.update(); hubUi.computer.update(dt); hubUi.upgrades.update(); hubUi.research.update(); hubUi.media.update(dt);
+      const hp = planet?.hub?.pose, nearHub = !!hp && Math.hypot(hp.x - headW.x, hp.z - headW.z) < 14;
+      if (nearHub) hubUi.cam.update(dt, renderer, scene, hubUi.mediaCam, () => { selfFull.visible = true; selfModel.visible = false; }, () => { selfFull.visible = false; });
+      if (planet?.hub) music.update(camera, planet.hub.group.localToWorld(hubUi.mediaAt.clone()));
+    }
 
     // Build mode: aim at the ground or at a piece, see what would be placed
     if (buildActive && buildSystem && planet) {
@@ -1315,7 +1356,7 @@ async function boot() {
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    THREE, health, narrator, net, remotes, voice, autosaveIn: (s: number) => { autosave = AUTOSAVE_SECONDS - s; }, loading, withLoading, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    THREE, music, placeHubNow: (x: number, z: number, yaw: number) => { const built = planet!.placeHub(x, z, yaw, heightAt(x, z)); progress.hubPlaced = true; buildHubUi(built); return built; }, health, narrator, net, remotes, voice, autosaveIn: (s: number) => { autosave = AUTOSAVE_SECONDS - s; }, loading, withLoading, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
     get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },
