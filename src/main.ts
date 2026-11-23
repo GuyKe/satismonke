@@ -18,6 +18,11 @@ import { LoadingScreen } from './ui/LoadingScreen';
 import { MediaScreen, MediaHost } from './ui/MediaScreen';
 import { CameraPanel } from './ui/CameraPanel';
 import { Music } from './audio/Music';
+import type { Mode, ModeId, ModeCtx } from './modes/Mode';
+import { Backrooms } from './modes/Backrooms';
+import { Sandbox } from './modes/Sandbox';
+import { PropHunt } from './modes/PropHunt';
+import { makeDiorama, animateDiorama } from './modes/Dioramas';
 import { Clip, clipStore } from './media/Clip';
 import { globalFeed } from './media/GlobalFeed';
 import { Look, loadLook, saveLook } from './game/Cosmetics';
@@ -237,6 +242,9 @@ async function boot() {
   let appMode: 'menu' | 'game' = 'menu';
   let planet: Planet | null = null;
   let currentMap: MapId = 'plains';
+  /** The game mode being played (Prop Hunt, Backrooms, Sandbox), if any. */
+  let gameMode: Mode | null = null;
+  const handPrev: (THREE.Vector3 | null)[] = [null, null];
   let currentSlot = 0, playSeconds = 0, autosave = 0, pauseOpen = false;
   const MENU_SPAWN = new THREE.Vector3(0, 0, 2.4);
 
@@ -328,9 +336,9 @@ async function boot() {
   };
 
   /** Land on the planet: a fresh landing (d = null) or a loaded save. */
-  const startPlanet = (d: SaveData | null) => {
+  const startPlanet = (d: SaveData | null, quiet = false) => {
     setMap(currentMap);
-    const pl = new Planet(undefined, d?.planet?.quality ?? settings.graphics); planet = pl;
+    const pl = new Planet(undefined, d?.planet?.quality ?? settings.graphics, { quiet }); planet = pl;
     ship.visible = false;
     scene.add(pl.group);
     player.world = pl.world;
@@ -348,6 +356,8 @@ async function boot() {
       applyGear();
       player.teleport(new THREE.Vector3(d.player.x, d.player.y, d.player.z));
       story.phase = 'planet';
+    } else if (quiet) {
+      player.teleport(new THREE.Vector3(0, 0.1, 0)); applyGear();   // a game mode: no pod, no landing
     } else {
       player.teleport(new THREE.Vector3(0, 0.1, 0));
       // Your pod sits behind wherever you are facing when you land
@@ -376,6 +386,7 @@ async function boot() {
 
   /** Throw away everything about the running game. */
   const resetGame = () => {
+    endMode();
     if (planet) { scene.remove(planet.group); disposeObject(planet.group); planet = null; }
     scene.fog = null; scene.background = new THREE.Color(0x05070d);
     progress.reset(); placing = null; music.stop(true);
@@ -396,6 +407,7 @@ async function boot() {
     if (save && appMode === 'game' && currentSlot >= 0) saveGame();
     leaveLobby();
     resetGame();
+    mainPanel.hold(''); if (diorama) { menuRoom.group.remove(diorama); diorama = null; dioramaId = null; }
     appMode = 'menu'; ship.visible = false; menuRoom.group.visible = true;
     player.world = menuRoom.world; player.teleport(MENU_SPAWN);
     mainPanel.open();
@@ -412,6 +424,8 @@ async function boot() {
   };
   const refreshLobby = () => {
     const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); remotes.setPlayers(net.list, net.me.id);
+    if (gameMode?.id === 'propHunt') { (gameMode as PropHunt).onPlayersChanged(); if (net.state === 'error') { toast(net.error || 'Lost the game', headPos()); enterMainMenu(false); } }
+    if (appMode === 'menu' && net.publicMode === null && net.state === 'error') mainPanel.hold(net.error);
     if (net.state === 'lobby' || net.state === 'game') {
       void voice.sync(net.peerObj, net.me.id, net.list.map(p => p.id)).then(() => { const l2 = lobbyInfo(); mainPanel.setLobby(l2); pausePanel.setLobby(l2); });
     } else voice.stop();
@@ -450,7 +464,10 @@ async function boot() {
   net.onFactory = applyFactoryState;
   net.onBuild = d => { if (buildSystem && !net.isHost) buildSystem.load(d as BuildState); };
   net.snapshots = () => ({ f: factory.toJSON(), b: buildSystem?.toJSON() ?? null });
-  net.onStart = clock => { if (appMode !== 'game' || currentSlot >= 0) withLoading(() => beginMultiplayer(clock)); };
+  net.onStart = clock => {
+    if (net.publicMode === 'propHunt') { withLoading(() => beginPropHunt(), 2.5); return; }
+    if (appMode !== 'game' || currentSlot >= 0) withLoading(() => beginMultiplayer(clock));
+  };
   const leaveLobby = () => { pendingRealm = null; net.leave(); remotes.clear(); const l = lobbyInfo(); mainPanel.setLobby(l); pausePanel.setLobby(l); };
   const beginMultiplayer = (clock: number) => {
     resetGame();
@@ -542,6 +559,39 @@ async function boot() {
     loading.show(); loadJob = job; loadFrames = 0; loadMin = fastLoad ? 0 : minSeconds;
   };
 
+  // ---- Game modes: Prop Hunt, Backrooms, Sandbox ----
+  const chatMode = (key: string) => { chat(key, 6); };
+  const modePanels: THREE.Mesh[] = [];
+  const endMode = () => {
+    if (!gameMode) return;
+    gameMode.dispose(); gameMode = null;
+    for (const m of modePanels) scene.remove(m); modePanels.length = 0;
+  };
+  const enterModeWorld = () => {
+    resetGame(); currentSlot = -1; appMode = 'game'; menuRoom.group.visible = false; autosave = 0; playSeconds = 0;
+    story.phase = 'planet'; ship.visible = false;
+  };
+  const modeFwd = () => { const d = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion())); d.y = 0; if (d.lengthSq() < 1e-4) d.set(0, 0, -1); return { pos: new THREE.Vector3().copy(player.position).add(camera.position), dir: d.normalize() }; };
+  const beginBackrooms = () => {
+    enterModeWorld();
+    const br = new Backrooms(scene); gameMode = br;
+    player.world = br.world; player.teleport(br.spawn);
+    toast('The backrooms. Find almond water and food. Do not stop.', headPos()); chatMode('brStart');
+  };
+  const beginSandbox = () => {
+    enterModeWorld(); currentMap = 'plains'; startPlanet(null, true); story.phase = 'planet';
+    const sb = new Sandbox(planet!, scene, modeFwd, () => sfx.crumble(), open => { sbPanelOpen = open; }); gameMode = sb;
+    scene.add(sb.panel.mesh); sb.panel.mesh.visible = false; modePanels.push(sb.panel.mesh);
+    toast('Sandbox: X opens the spawn menu. Swing your fists!', headPos()); chatMode('sbStart');
+  };
+  const beginPropHunt = () => {
+    enterModeWorld(); currentMap = 'plains'; startPlanet(null, true); story.phase = 'planet';
+    const ph = new PropHunt(net, planet!, scene, remotes, p => player.teleport(p), chatMode); gameMode = ph;
+    scene.add(ph.panel.mesh); ph.panel.mesh.visible = false; modePanels.push(ph.panel.mesh);
+    refreshLobby();
+  };
+  let sbPanelOpen = false;
+
   const beginGame = (slot: number, mode: 'new' | 'load', map?: MapId) => {
     const d = mode === 'load' ? readSlot(slot) : null;
     currentMap = d ? (d.planet?.map ?? d.map ?? 'plains') : (map ?? 'plains');
@@ -616,6 +666,17 @@ async function boot() {
     getLook: () => look,
     onLook: l => applyLook(l),
     onToggleMic: () => toggleMic(),
+    onModeHover: id => {
+      if (id === dioramaId) return;
+      if (diorama) { menuRoom.group.remove(diorama); diorama = null; }
+      dioramaId = id;
+      if (id) { diorama = makeDiorama(id, look); diorama.position.set(id === 'backrooms' ? 1.9 : 1.85, id === 'sandbox' ? 0 : 0, -1.4); diorama.scale.setScalar(id === 'backrooms' ? 0.9 : 1); menuRoom.group.add(diorama); }
+    },
+    onPlayMode: id => {
+      if (id === 'backrooms') withLoading(() => beginBackrooms(), 2.5);
+      else if (id === 'sandbox') withLoading(() => beginSandbox(), 2.5);
+      else { mainPanel.hold('Looking for a game...'); net.quickPlay('propHunt'); }
+    },
     inventory: () => {
       const it = progress.items;
       const rows: [string, keyof typeof it, string][] = [['WOOD', 'wood', '#e8b27a'], ['BIOMASS', 'biomass', '#7fe05a'], ['STONE', 'stone', '#c0c4d0'], ['STEEL', 'steel', '#8fc3ff'], ['CRYSTAL', 'crystal', '#6fe8ff'], ['COPPER', 'copper', '#e08a3c'],
@@ -664,6 +725,7 @@ async function boot() {
   let preview = new PlayerModel(look.fur, { suit: look.suit, hat: look.hat, badge: look.badge });
   const previewG = new THREE.Group(); previewG.add(preview.group); previewG.position.set(1.75, 1.45, -1.5); previewG.scale.setScalar(1.15); menuRoom.group.add(previewG);
   let previewT = 0;
+  let diorama: THREE.Group | null = null, dioramaId: ModeId | null = null;
   const applyLook = (l: Look) => {
     look = { ...l }; saveLook(look);
     net.me.color = look.fur; net.me.look = { suit: look.suit, hat: look.hat, badge: look.badge };
@@ -1024,13 +1086,13 @@ async function boot() {
       if (yNow && !yPrev) togglePause();                                        // Y / Esc: pause menu
       if (!pauseOpen) {
         if (aNow && !aPrev) setPanel(floating === 'map' ? null : 'map');        // A: map
-        if (xNow && !xPrev) setPanel(floating === 'craft' ? null : 'craft');    // X: crafting
+        if (xNow && !xPrev) { if (gameMode?.id === 'sandbox') { sbPanelOpen = !sbPanelOpen; (gameMode as Sandbox).panelOpen = sbPanelOpen; } else setPanel(floating === 'craft' ? null : 'craft'); }    // X: crafting (the spawn menu in the sandbox)
         if (bNow && !bPrev) { if (ship.visible) story.skipToTitle(); else { if (buildActive) setBuild(false); cancelPlacing(); if (linkMode) { linkMode = false; linkFrom = null; toast('Link mode off', headPos()); } } } // B: skip the crash scene (capsule) / cancel placing (planet)
       }
     }
     aPrev = aNow; bPrev = bNow; xPrev = xNow; yPrev = yNow;
     const gripDown = [keys.grip || btn(0, 1), keys.grip || btn(1, 1)];
-    overlay.set(story.blackAlpha, story.titleAlpha);
+    overlay.set(Math.max(story.blackAlpha, gameMode?.id === 'propHunt' && (gameMode as PropHunt).blind ? 1 : 0), story.titleAlpha);
     sfx.rumble(story.rumble);
 
     if (inXR) {
@@ -1053,7 +1115,7 @@ async function boot() {
       const hq = camera.getWorldQuaternion(new THREE.Quaternion()), he = new THREE.Euler().setFromQuaternion(hq, 'YXZ');
       selfFull.setPose(new THREE.Vector3().copy(player.position).add(camera.position), he.y, he.x, he.z, player.hands[0].world, player.hands[1].world, dt);
     }
-    selfModel.visible = inXR;
+    selfModel.visible = inXR && !(gameMode?.id === 'sandbox' && (gameMode as Sandbox).bodyRig);
     if (inXR) {
       const hq = camera.getWorldQuaternion(new THREE.Quaternion()), he = new THREE.Euler().setFromQuaternion(hq, 'YXZ');
       selfModel.setPose(new THREE.Vector3().copy(player.position).add(camera.position), he.y, he.x, he.z, player.hands[0].world, player.hands[1].world, dt);
@@ -1099,6 +1161,13 @@ async function boot() {
       const near = planet.nearestHazard(headNow.x, headNow.z);
       if (near && near.dist > 0 && near.dist < 30) say(near.kind === 'poison' ? 'poisonNear' : 'radNear');
     } else overlay.setTint(0, 0);
+    // backrooms (no planet): hunger, thirst, lurkers and being knocked out
+    if (gameMode?.id === 'backrooms' && appMode === 'game' && !pauseOpen) {
+      const br = gameMode as Backrooms;
+      if (health.update(simDt, 0)) { player.teleport(br.respawn()); health.reset(); toast('You wake up where you started', headPos()); chatMode('brCaught'); sfx.fail(); }
+      const danger = Math.max(0, 1 - br.nearestMonster(headNow) / 16);
+      overlay.setTint(health.flash > 0.02 ? 0xff2020 : danger > 0.05 ? 0x300000 : 0x000000, health.flash > 0.02 ? Math.min(0.55, health.flash * 0.6) : danger * 0.3);
+    }
 
     // Grip + punch: fell trees, smash boulders (stone) and the crashed pod (steel)
     const headW = new THREE.Vector3().copy(player.position).add(camera.position);
@@ -1150,6 +1219,7 @@ async function boot() {
       if (floating === 'map') targets.push(map);
       if (floating === 'craft') targets.push(craftPanel);
       if (buildActive) targets.push(buildPanel);
+      for (const mp of [gameMode?.id === 'sandbox' && sbPanelOpen ? (gameMode as Sandbox).panel : null, gameMode?.id === 'propHunt' && (gameMode as PropHunt).choosing ? (gameMode as PropHunt).panel : null]) if (mp && mp.mesh.visible) targets.push(mp);
       if (machinePanel.mesh.visible && !linkMode) targets.push(machinePanel);   // while joining things, the status card must never swallow a click
       if (hubUi && planet?.hub && Math.hypot(planet.hub.pose.x - headW.x, planet.hub.pose.z - headW.z) < 14) targets.push(hubUi.bench, hubUi.computer, hubUi.upgrades, hubUi.research, hubUi.media, hubUi.cam);
     }
@@ -1224,7 +1294,7 @@ async function boot() {
     if (appMode === 'menu') {
       menuRoom.update(dt); mainPanel.update(dt);
       // the mannequin turns toward you, sways and waves
-      previewT += dt; previewG.visible = true;
+      previewT += dt; previewG.visible = !diorama; if (diorama) animateDiorama(diorama, dt);
       previewG.rotation.y = Math.PI * 0 + Math.sin(previewT * 0.5) * 0.35 - 0.3;
       const wv = Math.sin(previewT * 4.5);
       preview.setPose(new THREE.Vector3(0, 0, 0), Math.PI, 0, Math.sin(previewT * 0.8) * 0.05, new THREE.Vector3(0.3, -0.62, 0.05), new THREE.Vector3(-0.36 - wv * 0.04, 0.12 + wv * 0.05, 0.04), dt);
@@ -1347,13 +1417,30 @@ async function boot() {
       if (loadJob && ++loadFrames >= (fastLoad ? 1 : 3)) { const j = loadJob; loadJob = null; j(); }
       else if (!loadJob && loading.shownFor >= loadMin) loading.hide();
     }
+    // game modes: panels in front of you, and the mode itself
+    for (const mp of modePanels) mp.visible = false;
+    if (gameMode && appMode === 'game' && !pauseOpen) {
+      const handSpeed = [0, 0];
+      player.hands.forEach((h, i) => { const prev = handPrev[i]; if (prev && dt > 0) handSpeed[i] = h.world.distanceTo(prev) / dt; handPrev[i] = (handPrev[i] ?? new THREE.Vector3()).copy(h.world); });
+      const ctx: ModeCtx = {
+        camera, head: headW, hands: player.hands.map(h => h.world), handSpeed, gripDown,
+        hurt: n => { health.hurt(n); sfx.hurt(); }, toast: (t, at) => toast(t, at), say: chatMode, pickup: () => sfx.pickup(), growl: at => sfx.roar(at, 'serpent'),
+      };
+      gameMode.update(dt, ctx);
+      const modePanel = gameMode.id === 'sandbox' && sbPanelOpen ? (gameMode as Sandbox).panel : gameMode.id === 'propHunt' && (gameMode as PropHunt).choosing ? (gameMode as PropHunt).panel : null;
+      if (modePanel) {
+        const target = headW.clone().addScaledVector(modeFwd().dir, 1.05); target.y = headW.y - 0.1;
+        if (!modePanel.mesh.visible) modePanel.mesh.position.copy(target); else modePanel.mesh.position.lerp(target, 1 - Math.exp(-8 * dt));
+        modePanel.mesh.visible = true; modePanel.mesh.lookAt(headW);
+      }
+    }
     narrator.update(dt);
 
     // Wrist displays and the desktop text overlay
-    const obj = progress.objective();
+    const obj = gameMode ? gameMode.hud() : progress.objective();
     resourceHud.set(progress); objectiveHud.set(obj, health.hp, [gear.mask && 'MASK', gear.hazmat && 'SUIT', gear.boots && 'BOOTS'].filter(Boolean).join(' '));
-    hudDom.style.display = appMode === 'game' && planet && !inXR && !pauseOpen ? 'block' : 'none';
-    hudDom.textContent = `OBJECTIVE: ${obj[0]}\n${obj[1]}\nwood ${progress.items.wood}  stone ${progress.items.stone}  iron ${progress.items.iron}  copper ${progress.items.copper}  plate ${progress.items.plate}\npower ${factory.power.supply.toFixed(1)} / ${factory.power.demand.toFixed(1)} MW${linkMode ? '   LINK MODE (B stops)' : ''}\n[M] map  [X] craft  [G+punch] hit  [click] use`;
+    hudDom.style.display = appMode === 'game' && (planet || gameMode) && !inXR && !pauseOpen ? 'block' : 'none';
+    hudDom.textContent = gameMode ? `${obj[0]}\n${obj[1]}\n${gameMode.id === 'sandbox' ? '[X] spawn menu  [swing fists] tear them apart' : gameMode.id === 'backrooms' ? 'touch things on the floor to pick them up' : 'punch props to catch them (catcher)'}` : `OBJECTIVE: ${obj[0]}\n${obj[1]}\nwood ${progress.items.wood}  stone ${progress.items.stone}  iron ${progress.items.iron}  copper ${progress.items.copper}  plate ${progress.items.plate}\npower ${factory.power.supply.toFixed(1)} / ${factory.power.demand.toFixed(1)} MW${linkMode ? '   LINK MODE (B stops)' : ''}\n[M] map  [X] craft  [G+punch] hit  [click] use`;
     for (let i = toasts.length - 1; i >= 0; i--) {
       const t = toasts[i]; t.t += dt;
       t.sprite.position.y += dt * 0.8;
@@ -1374,7 +1461,7 @@ async function boot() {
 
   // Exposed for debugging / automated tests
   (window as unknown as Record<string, unknown>).__game = {
-    THREE, music, placeHubNow: (x: number, z: number, yaw: number) => { const built = planet!.placeHub(x, z, yaw, heightAt(x, z)); progress.hubPlaced = true; buildHubUi(built); return built; }, health, narrator, net, remotes, voice, autosaveIn: (s: number) => { autosave = AUTOSAVE_SECONDS - s; }, loading, withLoading, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
+    THREE, music, beginBackrooms, beginSandbox, beginPropHunt, get gameMode() { return gameMode; }, placeHubNow: (x: number, z: number, yaw: number) => { const built = planet!.placeHub(x, z, yaw, heightAt(x, z)); progress.hubPlaced = true; buildHubUi(built); return built; }, health, narrator, net, remotes, voice, autosaveIn: (s: number) => { autosave = AUTOSAVE_SECONDS - s; }, loading, withLoading, planetRef: () => planet, get buildSystem() { return buildSystem; }, buildPanel, setBuild, buildPress, get buildPlan() { return buildPlan; }, factory, get factoryView() { return factoryView; }, machinePanel, handleLink, machineAction, progress, craft, tryPlaceHub: () => tryPlace(), cancelPlacing, setPanel, camera, beginGame, enterMainMenu, saveGame, togglePause, mainPanel, pausePanel, menuRoom,
     get appMode() { return appMode; }, get pauseOpen() { return pauseOpen; }, renderer, scene, player, story, settings, menu,
     fell: (id: number) => planet?.fellTree(id, new THREE.Vector3(0, 0, 0)),
     look: (y: number, p: number) => { yaw = y; pitch = p; },

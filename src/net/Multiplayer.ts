@@ -29,7 +29,11 @@ type Msg =
   | { t: 'clip'; c: Clip }
   | { t: 'clips'; cs: Clip[] }
   | { t: 'music'; id: string | null }
-  | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[]; world: WorldEvent[]; map?: MapId }
+  | { t: 'probe' }
+  | { t: 'probeRes'; n: number; max: number; phase: string; mode: string }
+  | { t: 'game'; d: unknown }
+  | { t: 'gev'; d: unknown }
+  | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[]; world: WorldEvent[]; map?: MapId; pub?: string }
   | { t: 'join'; p: PlayerInfo }
   | { t: 'leave'; id: string }
   | { t: 'start'; clock: number; world?: WorldEvent[]; map?: MapId }
@@ -63,6 +67,9 @@ export function playerId(): string {
   try { localStorage.setItem('satismonke.pid', id); } catch { /* ignore */ }
   return id;
 }
+
+/** Fixed peer-id slots for public games (matchmaking without a server): a lobby lives on one of these. */
+export const PUBLIC_SLOTS = ['PA', 'PB', 'PC', 'PD', 'PE', 'PF', 'PG', 'PH'];
 
 export function randomCode(): string {
   let s = ''; for (let i = 0; i < CODE_LEN; i++) s += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
@@ -111,6 +118,15 @@ export class Net {
   private peerPid = new Map<string, string>();     // host: peer id -> player id
   private pendingProg: ((peer: string, d: unknown, pos: number[]) => void) | null = null;
   /** Videos people in this lobby have published from the media computer (the host keeps the latest few for late joiners). */
+  /** A public game mode lobby (matchmade, no code): 'propHunt'. */
+  publicMode: string | null = null;
+  /** Host: where the game mode is (waiting / prep / hunt / end): newcomers can only join between rounds. */
+  phase: () => string = () => 'waiting';
+  /** Host -> everyone: the game mode's state. Everyone -> host: something that happened (picked a prop, caught someone). */
+  onGame: (d: unknown) => void = () => {};
+  onGameEvent: (from: string, d: unknown) => void = () => {};
+  /** Host: everyone's latest head position (the game mode checks catches with it). */
+  poses = new Map<string, Pose>();
   lobbyClips: Clip[] = [];
   onClip: (c: Clip) => void = () => {};
   /** Someone started or stopped the media computer's music. */
@@ -146,18 +162,20 @@ export class Net {
   get list(): PlayerInfo[] { return [this.me, ...[...this.players.values()].filter(p => p.id !== this.me.id)]; }
 
   /** Create a lobby and wait for friends. */
-  host(attempt = 0, realm?: RealmSeed): void {
+  host(attempt = 0, realm?: RealmSeed, fixed?: { code: string; mode: string; onTaken: () => void }): void {
     this.leave(true);
-    this.state = 'connecting'; this.isHost = true; this.error = ''; this.code = attempt > 0 || !realm ? randomCode() : realm.code; this.onChange();
+    this.state = 'connecting'; this.isHost = true; this.error = ''; this.code = fixed ? fixed.code : attempt > 0 || !realm ? randomCode() : realm.code; this.publicMode = fixed ? fixed.mode : null; if (fixed) this.maxPlayers = 15; this.onChange();
     if (realm) { this.members = new Map(Object.entries(realm.members)); this.allowSaving = true; this.maxPlayers = realm.maxPlayers; this.map = realm.map ?? 'plains'; for (const [pid, v] of Object.entries(realm.progressOf)) this.memberData.set(pid, v); }
     const peer = new Peer(PREFIX + this.code, this.peerOptions());
     this.peer = peer;
     peer.on('open', id => {
       this.myId = id; this.me.id = id; this.players.clear(); this.players.set(id, this.me);
-      this.state = 'lobby'; this.onChange();
+      if (fixed) { this.state = 'game'; this.onChange(); this.onStart(this.getClock()); }   // a public game: you are in at once
+      else { this.state = 'lobby'; this.onChange(); }
     });
     peer.on('connection', c => this.hostAccept(c));
     peer.on('error', (e: { type?: string; message?: string }) => {
+      if (e.type === 'unavailable-id' && fixed) { peer.destroy(); fixed.onTaken(); return; }
       if (e.type === 'unavailable-id' && realm) { this.fail('That realm is still online or its code is busy. Try again in a minute.'); return; }
       if (e.type === 'unavailable-id' && attempt < 5) { peer.destroy(); this.host(attempt + 1); return; }
       this.fail(e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' ? 'Cannot reach the lobby server' : (e.message ?? 'Network error'));
@@ -188,7 +206,7 @@ export class Net {
 
   leave(quiet = false): void {
     this.peer?.destroy(); this.peer = null; this.conns.clear(); this.players.clear();
-    this.members = null; this.allowSaving = false; this.maxPlayers = 8; this.map = 'plains'; this.lobbyClips = []; this.memberData.clear(); this.restoreData = null; this.peerPid.clear();
+    this.members = null; this.allowSaving = false; this.maxPlayers = 8; this.map = 'plains'; this.lobbyClips = []; this.publicMode = null; this.poses.clear(); this.memberData.clear(); this.restoreData = null; this.peerPid.clear();
     this.state = 'off'; this.isHost = false; this.code = ''; this.worldLog = []; this.worldSeen.clear(); this.pendingOps.clear(); this.lastFactory = this.lastBuild = null;
     if (!quiet) this.onChange();
   }
@@ -206,16 +224,21 @@ export class Net {
       const m = d as Msg;
       if (m.t === 'hello') {
         const pid = String(m.pid ?? '');
+        if (this.publicMode && this.phase() !== 'waiting' && this.phase() !== 'prep') { c.send({ t: 'reject', msg: 'A round is in progress' } as Msg); setTimeout(() => c.close(), 300); return; }
         if (this.members && !this.members.has(pid)) { c.send({ t: 'reject', msg: 'You are not a member of this realm' } as Msg); setTimeout(() => c.close(), 300); return; }
         if (this.players.size >= this.maxPlayers) { c.send({ t: 'reject', msg: 'This lobby is full' } as Msg); setTimeout(() => c.close(), 300); return; }
         const lk = m.look, p: PlayerInfo = { id: c.peer, name: String(m.name).slice(0, 20), color: m.color | 0, look: lk ? { suit: lk.suit | 0, hat: String(lk.hat).slice(0, 12), badge: String(lk.badge).slice(0, 12) } : undefined };
         this.players.set(p.id, p); this.conns.set(p.id, c); this.peerPid.set(p.id, pid);
         const mem = this.memberData.get(pid); if (mem) c.send({ t: 'restore', d: mem.progress, pos: mem.pos } as Msg);
         if (this.lobbyClips.length) c.send({ t: 'clips', cs: this.lobbyClips.slice(-3) } as Msg);
-        c.send({ t: 'welcome', id: p.id, clock: this.getClock(), started: this.state === 'game', players: this.list, world: this.worldLog, map: this.map } as Msg);
+        c.send({ t: 'welcome', id: p.id, clock: this.getClock(), started: this.state === 'game', players: this.list, world: this.worldLog, map: this.map, pub: this.publicMode ?? undefined } as Msg);
         this.broadcast({ t: 'join', p } as Msg, p.id);
         if (this.state === 'game') { const s = this.snapshots(); c.send({ t: 'fs', d: s.f } as Msg); c.send({ t: 'bs', d: s.b } as Msg); }
         this.onChange();
+      } else if (m.t === 'probe') {
+        c.send({ t: 'probeRes', n: this.players.size, max: this.maxPlayers, phase: this.phase(), mode: this.publicMode ?? '' } as Msg);
+      } else if (m.t === 'gev') {
+        this.onGameEvent(c.peer, m.d);
       } else if (m.t === 'clip') {
         if (this.keepClip(m.c)) { this.onClip(m.c); this.broadcast(m, c.peer); }
       } else if (m.t === 'music') {
@@ -228,7 +251,7 @@ export class Net {
       } else if (m.t === 'w') {
         if (this.logWorld(m.k, m.i, m.d)) { this.onWorld(m.k, m.i, m.d); this.broadcast(m, c.peer); }
       } else if (m.t === 's') {
-        this.onPose(c.peer, m.p);
+        this.poses.set(c.peer, m.p); this.onPose(c.peer, m.p);
         this.broadcast({ t: 's', id: c.peer, p: m.p }, c.peer);
       }
     });
@@ -245,7 +268,7 @@ export class Net {
       case 'welcome':
         this.players.clear(); for (const p of m.players) this.players.set(p.id, p); this.players.set(this.me.id, this.me);
         for (const [k, i, d] of m.world ?? []) this.logWorld(k, i, d);
-        this.map = m.map ?? 'plains';
+        this.map = m.map ?? 'plains'; this.publicMode = m.pub ?? null;
         this.state = m.started ? 'game' : 'lobby'; this.onChange();
         if (m.started) this.onStart(m.clock);
         break;
@@ -254,6 +277,7 @@ export class Net {
       case 'start': this.map = m.map ?? this.map; for (const [k, i, d] of m.world ?? []) this.logWorld(k, i, d); this.state = 'game'; this.onStart(m.clock); this.onChange(); break;
       case 'clock': this.onClock(m.clock); break;
       case 'reject': this.fail(m.msg); break;
+      case 'game': this.onGame(m.d); break;
       case 'clip': if (this.keepClip(m.c)) this.onClip(m.c); break;
       case 'clips': for (const c of m.cs) if (this.keepClip(c)) this.onClip(c); break;
       case 'music': this.onMusic(m.id); break;
@@ -280,6 +304,47 @@ export class Net {
     this.lobbyClips.push({ ...c, source: 'lobby', title: String(c.title).slice(0, 40), author: String(c.author).slice(0, 24) });
     if (this.lobbyClips.length > 6) this.lobbyClips.shift();
     return true;
+  }
+
+  /** Host: send the game mode's state to everyone. */
+  sendGame(d: unknown): void { if (this.isHost) this.broadcast({ t: 'game', d }); }
+  /** A player tells the host something that happened (the host handles its own directly). */
+  sendGameEvent(d: unknown): void {
+    if (this.isHost) { this.onGameEvent(this.me.id, d); return; }
+    const c = this.conns.get('host'); if (c?.open) c.send({ t: 'gev', d } as Msg);
+  }
+
+  /**
+   * Quick play for a public game mode: look for a lobby that already has people in it and join the fullest one that is
+   * between rounds; if there is none, start one on a random free slot. There is no server: the slots are fixed peer ids.
+   */
+  quickPlay(mode: string, tries = 0): void {
+    this.leave(true);
+    this.state = 'connecting'; this.isHost = false; this.error = ''; this.code = ''; this.onChange();
+    const slots = PUBLIC_SLOTS.map(s => s + mode.slice(0, 2).toUpperCase());
+    const peer = new Peer(this.peerOptions()); this.peer = peer;
+    const found: { slot: string; n: number; max: number; phase: string; mode: string }[] = [];
+    let decided = false;
+    const decide = () => {
+      if (decided) return; decided = true; peer.destroy(); this.peer = null;
+      const joinable = found.filter(f => f.mode === mode && f.n < f.max && (f.phase === 'waiting' || f.phase === 'prep')).sort((a, b) => b.n - a.n || Math.random() - 0.5);
+      if (joinable.length) { this.join(joinable[0].slot); return; }
+      const taken = new Set(found.map(f => f.slot)), free = slots.filter(s => !taken.has(s)).sort(() => Math.random() - 0.5);
+      if (!free.length) { if (tries < 3) setTimeout(() => this.quickPlay(mode, tries + 1), 1500); else this.fail('Every game is in a round right now. Try again in a moment.'); return; }
+      this.host(0, undefined, { code: free[0], mode, onTaken: () => { if (tries < 4) this.quickPlay(mode, tries + 1); else this.fail('Could not find or start a game'); } });
+    };
+    peer.on('open', () => {
+      for (const slot of slots) {
+        const c = peer.connect(PREFIX + slot, { reliable: true });
+        c.on('open', () => c.send({ t: 'probe' } as Msg));
+        c.on('data', d => { const r = d as Msg; if (r.t === 'probeRes') { found.push({ slot, n: r.n, max: r.max, phase: r.phase, mode: r.mode }); c.close(); } });
+      }
+      setTimeout(decide, 3200);
+    });
+    peer.on('error', (e: { type?: string; message?: string }) => {
+      if (e.type === 'peer-unavailable') return;   // an empty slot: exactly what we are looking for
+      if (!decided) { decided = true; this.fail(e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' ? 'Cannot reach the matchmaking server' : (e.message ?? 'Network error')); }
+    });
   }
 
   /** Share a clip with everyone in the lobby. */
@@ -352,7 +417,8 @@ export class Net {
     if (this.state !== 'game') return;
     if ((this.sendT += dt) >= 1 / SEND_HZ) {
       this.sendT = 0;
-      const m: Msg = { t: 's', id: this.me.id, p: pose() };
+      const pz = pose(); if (this.isHost) this.poses.set(this.me.id, pz);
+      const m: Msg = { t: 's', id: this.me.id, p: pz };
       if (this.isHost) this.broadcast(m); else this.conns.get('host')?.open && this.conns.get('host')!.send(m);
     }
     if (this.isHost && (this.clockT += dt) >= 5) { this.clockT = 0; this.broadcast({ t: 'clock', clock: this.getClock() }); }

@@ -4,11 +4,12 @@ import { SaveData, SLOTS, listSlots, formatAgo, formatPlaytime } from '../game/S
 import type { Settings, Quality } from '../settings';
 import { CODE_CHARS, CODE_LEN } from '../net/Multiplayer';
 import { MAPS, MAP_IDS, MapId } from '../world/MapDef';
+import type { ModeId } from '../modes/Mode';
 import { Look, FUR_PALETTE, SUIT_PALETTE, SUIT_NAMES, HATS, BADGES, stepColor, stepItem, redeem, loadUnlocked } from '../game/Cosmetics';
 import { CONTROLS_LINES, HOWTO_LINES, RESOURCE_GUIDE } from './helpText';
 
 const W = 800, H = 500;
-type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby' | 'realms' | 'custom' | 'code' | 'maps' | 'inventory';
+type Page = 'main' | 'slots' | 'controls' | 'howto' | 'pause' | 'settings' | 'guide' | 'multi' | 'join' | 'lobby' | 'realms' | 'custom' | 'code' | 'maps' | 'inventory' | 'modes';
 
 /** A saved realm, either one you host or one you are a member of. */
 export interface RealmEntry { code: string; kind: 'host' | 'member'; line1: string; line2: string }
@@ -40,6 +41,9 @@ export interface MenuHandlers {
   getLook(): Look;
   onLook(l: Look): void;
   onToggleMic(): void;
+  /** A game mode (not the story): start it, and which one the mouse/laser is over (for the model beside the menu). */
+  onPlayMode(id: ModeId): void;
+  onModeHover(id: ModeId | null): void;
   /** Everything you carry, and your tools (Conveyor Link, Power Line, Build Tool). */
   inventory(): InvTile[];
   tools(): ToolTile[];
@@ -91,6 +95,8 @@ export class MenuPanel extends Screen {
     this.dirty = true;
     this.build();
   }
+  /** A message that stays until replaced (empty clears it). */
+  hold(text: string): void { this.status = text; this.statusT = text ? 1e9 : 0; this.dirty = true; }
   flash(text: string): void { this.status = text; this.statusT = 2.5; this.dirty = true; }
 
   private go(p: Page): void { this.page = p; this.hovered.clear(); this.armedDelete = -1; this.build(); }
@@ -103,12 +109,12 @@ export class MenuPanel extends Screen {
       labels.map(([label, act], i) => ({ label, act, x: 190, y: y0 + i * (bh + gap), w: 420, h: bh }));
     switch (this.page) {
       case 'main':
-        this.btns = col([['PLAY', () => { this.slots = listSlots(); this.go('slots'); }], ['MULTIPLAYER', () => this.go('multi')], ['CUSTOMISE', () => this.go('custom')]], 118, 48, 8);
+        this.btns = col([['PLAY', () => { this.slots = listSlots(); this.go('slots'); }], ['GAME MODES', () => this.go('modes')], ['MULTIPLAYER', () => this.go('multi')], ['CUSTOMISE', () => this.go('custom')]], 114, 44, 6);
         const pairs: [[string, Page], [string, Page]][] = [[['CONTROLS', 'controls'], ['HOW TO PLAY', 'howto']], [['FIND RESOURCES', 'guide'], ['SETTINGS', 'settings']]];
         pairs.forEach(([l, r], i) => {
-          this.btns.push({ label: l[0], x: 190, y: 118 + (3 + i) * 56, w: 206, h: 48, act: () => this.go(l[1]) }, { label: r[0], x: 404, y: 118 + (3 + i) * 56, w: 206, h: 48, act: () => this.go(r[1]) });
+          this.btns.push({ label: l[0], x: 190, y: 114 + (4 + i) * 50, w: 206, h: 44, act: () => this.go(l[1]) }, { label: r[0], x: 404, y: 114 + (4 + i) * 50, w: 206, h: 44, act: () => this.go(r[1]) });
         });
-        this.btns.push({ label: 'ENTER CODE', x: 190, y: 118 + 5 * 56, w: 420, h: 48, act: () => { this.typed = ''; this.go('code'); } });
+        this.btns.push({ label: 'ENTER CODE', x: 190, y: 114 + 6 * 50, w: 420, h: 44, act: () => { this.typed = ''; this.go('code'); } });
         break;
       case 'inventory': {
         this.btns = this.h.tools().map((t, i) => ({
@@ -155,6 +161,11 @@ export class MenuPanel extends Screen {
           { label: 'JOIN', x: 314, y: 410, w: 170, h: 60, dim: this.code.length < CODE_LEN, act: () => { if (this.code.length === CODE_LEN) this.h.onJoin(this.code); } },
           { label: 'BACK', x: 602, y: 410, w: 170, h: 60, act: () => this.go('multi') },
         );
+        break;
+      }
+      case 'modes': {
+        this.btns = (['propHunt', 'backrooms', 'sandbox'] as ModeId[]).map((id, i) => ({ label: 'PLAY', x: 24 + i * 260 + 24, y: 340, w: 200, h: 56, act: () => this.h.onPlayMode(id) }));
+        this.btns.push({ label: 'BACK', x: 280, y: 424, w: 240, h: 56, act: () => this.go('main') });
         break;
       }
       case 'maps': {
@@ -280,6 +291,10 @@ export class MenuPanel extends Screen {
   }
 
   hover(pointer: number, uv: THREE.Vector2 | null): boolean {
+    if (this.page === 'modes') {   // which card is the pointer over? (the matching model shows beside the menu)
+      const px = uv ? uv.x * W : -1, py = uv ? (1 - uv.y) * H : -1, k = Math.floor((px - 24) / 260);
+      this.h.onModeHover(uv && py > 80 && py < 410 && k >= 0 && k < 3 ? (['propHunt', 'backrooms', 'sandbox'] as ModeId[])[k] : null);
+    }
     const i = this.idx(uv);
     if (i !== (this.hovered.get(pointer) ?? -1)) { this.hovered.set(pointer, i); this.dirty = true; }
     return i >= 0;
@@ -307,7 +322,7 @@ export class MenuPanel extends Screen {
     ctx.fillStyle = '#080c18'; ctx.fillRect(0, 0, W, H);
     ctx.strokeStyle = '#ffb347'; ctx.lineWidth = 6; ctx.strokeRect(5, 5, W - 10, H - 10);
     ctx.fillStyle = '#ffb347';
-    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY', realms: 'MY REALMS', custom: 'CUSTOMISE', code: 'ENTER A CODE', maps: 'CHOOSE A MAP', inventory: 'INVENTORY' };
+    const titles: Record<Page, string> = { main: 'SATISMONKE', slots: 'CHOOSE A SLOT', controls: 'CONTROLS', howto: 'HOW TO PLAY', pause: 'PAUSED', settings: 'SETTINGS', guide: 'FIND RESOURCES', multi: 'MULTIPLAYER', join: 'ENTER LOBBY CODE', lobby: 'LOBBY', realms: 'MY REALMS', custom: 'CUSTOMISE', code: 'ENTER A CODE', maps: 'CHOOSE A MAP', inventory: 'INVENTORY', modes: 'GAME MODES' };
     ctx.font = this.page === 'main' ? 'bold 72px monospace' : 'bold 48px monospace';
     ctx.fillText(titles[this.page], W / 2, this.page === 'main' ? 110 : 66);
 
@@ -326,6 +341,21 @@ export class MenuPanel extends Screen {
       });
       ctx.textAlign = 'left'; ctx.fillStyle = '#9ab'; ctx.font = 'bold 18px monospace'; ctx.fillText('TOOLS: click one, then click the two things to join', 24, 306);
       ctx.textAlign = 'center';
+    }
+    if (this.page === 'modes') {
+      const cards: { id: ModeId; name: string; who: string; lines: string[]; color: string }[] = [
+        { id: 'propHunt', name: 'PROP HUNT', who: '2-15 players, online', color: '#ff7ad8', lines: ['Hide as a prop for 3 minutes', 'while the catcher hunts you.', 'You are shown for 3 s a minute.'] },
+        { id: 'backrooms', name: 'BACKROOMS', who: 'solo', color: '#ffd23a', lines: ['Wander the yellow halls, find', 'almond water and food, run from', 'the lurkers. Keep fed and watered.'] },
+        { id: 'sandbox', name: 'SANDBOX', who: 'solo', color: '#ff7a6a', lines: ['Spawn dummies, animals and', 'monsters, or be the monster and', 'tear heads, arms and legs off.'] },
+      ];
+      cards.forEach((c, i) => {
+        const x = 24 + i * 260;
+        ctx.fillStyle = 'rgba(255,255,255,0.06)'; ctx.fillRect(x, 84, 248, 320); ctx.strokeStyle = c.color; ctx.lineWidth = 3; ctx.strokeRect(x, 84, 248, 320);
+        ctx.textAlign = 'center'; ctx.fillStyle = c.color; ctx.font = 'bold 28px monospace'; ctx.fillText(c.name, x + 124, 124);
+        ctx.fillStyle = '#9ab'; ctx.font = '16px monospace'; ctx.fillText(c.who, x + 124, 150);
+        ctx.fillStyle = '#d8e8f0'; ctx.font = '15px monospace'; c.lines.forEach((l, k) => ctx.fillText(l, x + 124, 200 + k * 24));
+      });
+      if (this.status) { ctx.fillStyle = '#7fe3c1'; ctx.font = 'bold 22px monospace'; ctx.fillText(this.status, W / 2, 414); }
     }
     if (this.page === 'maps') {
       MAP_IDS.forEach((id, i) => {

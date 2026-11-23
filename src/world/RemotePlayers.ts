@@ -26,6 +26,17 @@ class Avatar {
   }
 
   setMouth(loud: number): void { this.model.setMouth(loud); }
+  private disguise: THREE.Object3D | null = null; private groundY: ((x: number, z: number) => number) | null = null;
+  key: string | null = null;
+  get disguised(): boolean { return this.key !== null; }
+  setDisguise(key: string | null, d: { prop: THREE.Object3D; groundY: (x: number, z: number) => number } | null): void {
+    this.key = key;
+    if (this.disguise) { this.disguise.parent?.remove(this.disguise); this.disguise = null; }
+    this.groundY = null;
+    if (d) { this.disguise = d.prop; this.groundY = d.groundY; this.group().add(d.prop); }
+    this.model.visible = key === null && this.seen; this.tag.visible = key === null;
+  }
+  private group(): THREE.Object3D { return this.model.group.parent ?? this.model.group; }
   setSpeaking(on: boolean): void { (this.tag.material as THREE.SpriteMaterial).color.set(on ? 0x7fffa0 : 0xffffff); this.tag.scale.setScalar(1); this.tag.scale.set(on ? 0.7 : 0.6, on ? 0.175 : 0.15, 1); }
 
   step(k: number, dt: number): void {
@@ -35,6 +46,7 @@ class Avatar {
     this.e.setFromQuaternion(this.q, 'YXZ');
     this.model.setPose(this.head, this.e.y, this.e.x, this.e.z, this.l, this.r, dt);
     this.tag.position.set(this.head.x, this.head.y + 0.42, this.head.z);
+    if (this.disguise && this.groundY) { this.disguise.position.set(this.head.x, this.groundY(this.head.x, this.head.z), this.head.z); this.disguise.rotation.y = this.e.y; }
   }
 }
 
@@ -55,7 +67,7 @@ export class RemotePlayers {
     if (!a) { a = new Avatar(info); this.avatars.set(id, a); this.group.add(a.model.group); }
     const t = a.target;
     t.head.set(p[0], p[1], p[2]); t.q.set(p[3], p[4], p[5], p[6]).normalize(); t.l.set(p[7], p[8], p[9]); t.r.set(p[10], p[11], p[12]);
-    if (!a.seen) { a.seen = true; a.model.visible = true; a.head.copy(t.head); a.q.copy(t.q); a.l.copy(t.l); a.r.copy(t.r); }
+    if (!a.seen) { a.seen = true; a.model.visible = !a.disguised; a.head.copy(t.head); a.q.copy(t.q); a.l.copy(t.l); a.r.copy(t.r); }
   }
 
   remove(id: string): void { const a = this.avatars.get(id); if (!a) return; this.group.remove(a.model.group); disposeObject(a.model.group); this.avatars.delete(id); }
@@ -63,6 +75,11 @@ export class RemotePlayers {
   /** Where your friends are (for the map). */
   get positions(): { name: string; color: number; x: number; z: number }[] {
     return [...this.avatars.values()].filter(a => a.seen).map(a => ({ name: a.info.name, color: a.info.color, x: a.head.x, z: a.head.z }));
+  }
+  /** Show a player as something else: a prop (by id) standing on the ground, or hidden. null = as themselves. */
+  setDisguise(id: string, key: string | null, make?: () => { prop: THREE.Object3D; groundY: (x: number, z: number) => number }): void {
+    const a = this.avatars.get(id); if (!a || a.key === key) return;
+    a.setDisguise(key, key && make ? make() : null);
   }
   /** A friend's head position (for voice). */
   headOf(id: string): THREE.Vector3 | null { const a = this.avatars.get(id); return a && a.seen ? a.head : null; }

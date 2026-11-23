@@ -263,7 +263,7 @@ export class Planet {
   /** The map this planet is (set before it is built with Terrain.setMap). */
   readonly map: MapDef = getMap();
 
-  constructor(seed = getMap().seed, readonly quality: Quality = 'medium') {
+  constructor(seed = getMap().seed, readonly quality: Quality = 'medium', private opts: { quiet?: boolean } = {}) {
     this.seedBase = seed;
     this.q = QUALITY[quality];
     const rng = rngFrom(seed);
@@ -1024,7 +1024,15 @@ export class Planet {
     }
   }
 
+  /** Put a creature into the world (sandbox spawning). */
+  addAnimal(an: Animal, x: number, z: number): Animal {
+    an.group.position.set(x, heightAt(x, z), z); an.heading = Math.random() * Math.PI * 2;
+    this.animals.push(an); this.group.add(an.group); return an;
+  }
+  removeAnimal(an: Animal): void { const i = this.animals.indexOf(an); if (i >= 0) this.animals.splice(i, 1); this.group.remove(an.group); }
+
   private buildAnimals(rng: () => number): void {
+    if (this.opts.quiet) return;   // game modes with their own cast: no wildlife
     const q = this.q;
     const add = (an: Animal, x: number, y: number, z: number) => {
       an.group.position.set(x, y, z); an.heading = rng() * Math.PI * 2;
@@ -1481,7 +1489,7 @@ export class Planet {
   // ---------------- stone, pod and hub ----------------
 
   /** Spawn flying chunks that shrink away. */
-  private burst(pos: THREE.Vector3, n: number, color: number, size: number, speed = 4): void {
+  burst(pos: THREE.Vector3, n: number, color: number, size: number, speed = 4): void {
     const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.8, metalness: color === 0x8a96aa ? 0.7 : 0, flatShading: true });
     for (let i = 0; i < n; i++) {
       const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(size * (0.5 + Math.random() * 0.7), 0), mat);
