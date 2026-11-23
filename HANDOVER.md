@@ -188,3 +188,6 @@ In a lobby the **host owns the factory and the buildings**. Clients validate and
 
 ## Voice chat
 `src/net/Voice.ts`: proximity voice over PeerJS media calls (one call per pair; the player with the smaller peer id calls). Each friend's voice is positioned at their avatar with a Web Audio HRTF panner (quieter and directional with distance), their name tag turns green while they talk. It starts as soon as you are in a lobby (the browser asks for the microphone; if you refuse you can still hear everyone via a silent stand-in stream). Mute with the MIC button in the lobby / pause menu or the V key on desktop. Test: `tests/voice.mjs` (Chromium fake microphones).
+
+## Avatar detail pass
+`PlayerModel` now also has: eyebrows, cheeks, smile, hair and cheek tufts, blinking eyelids with sparkles, helmet lamps, pod lights and a glass glint; chest emblem, collar, shoulder pads with accent patches and beacons, belt buckle, pouches and a wrench, hoses from the pack, vents, light strip and dish on the pack; a 7-segment monkey tail that sways and swings as you turn; shoulder joints, elbow rings and accent bands on the arms; gloves with knuckle plates, fingertip pads and pulsing wrist lights; and a gentle breathing motion.

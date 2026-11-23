@@ -5,7 +5,8 @@ const UP = new THREE.Vector3(0, 1, 0);
 /**
  * "The Monke Pioneer": an original space-ape explorer in an astronaut suit. Fur in the player's colour, a pale muzzle,
  * big ears and eyes inside a glass helmet with a glowing antenna bulb; a white suit with a chest panel, a life-support
- * pack with a thruster and an accent stripe in the player's colour; and long stretchy arms ending in gloved fists. Everything is built from primitives, no assets.
+ * pack with hoses, vents and a thruster, a shoulder-pad patch and stripe in the player's colour, a swaying monkey tail; and long stretchy
+ * arms with elbow joints and wrist lights ending in gloved fists. The face blinks and smiles. Everything is built from primitives, no assets.
  *
  * Forward is -Z. `head` is the point between the eyes; the body hangs below it (there are no legs: the pioneer
  * floats on its arms, gorilla-tag style).
@@ -18,6 +19,13 @@ export class PlayerModel {
   private fists: THREE.Group[] = [];
   private glow: THREE.Mesh;
   private bulb: THREE.Mesh;
+  private lids: THREE.Mesh[] = [];
+  private tail: THREE.Group[] = [];
+  private torsoMesh: THREE.Mesh;
+  private elbows: THREE.Mesh[] = []; private bands: THREE.Mesh[] = []; private wristLights: THREE.Mesh[] = [];
+  private blinkT = 2 + Math.random() * 3;
+  private shoulders: THREE.Mesh[] = [];
+  private lastYaw = 0; private swayV = 0;
   private t = Math.random() * 10;
   private tmp = new THREE.Vector3(); private tmp2 = new THREE.Vector3(); private q = new THREE.Quaternion();
 
@@ -47,10 +55,27 @@ export class PlayerModel {
       h.add(sph(0.05, fur, s * 0.13, 0.005, 0.03, 1, 1, 0.5));            // ears
       h.add(sph(0.032, pale, s * 0.135, 0.005, 0.017, 1, 1, 0.4));
     }
+    const brow = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.35), roughness: 1 });
+    for (const sd of [-1, 1]) {
+      const eb = new THREE.Mesh(new THREE.CapsuleGeometry(0.009, 0.05, 3, 6), brow); eb.position.set(sd * 0.055, 0.067, -0.1); eb.rotation.z = Math.PI / 2 - sd * 0.22; h.add(eb);   // eyebrows
+      const lid = sph(0.032, fur, sd * 0.052, 0.025, -0.097, 1, 0.02, 1); lid.userData.base = 1; this.lids.push(lid); h.add(lid);                                              // eyelids (blink)
+      h.add(sph(0.007, white, sd * 0.045, 0.034, -0.14));                                                                                                                       // eye sparkle
+      h.add(sph(0.034, pale, sd * 0.085, -0.045, -0.075, 1, 0.8, 0.8));                                                                                                        // cheeks
+    }
+    const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.03, 0.004, 6, 14, Math.PI), black); mouth.position.set(0, -0.075, -0.135); mouth.rotation.z = Math.PI; h.add(mouth);   // smile
+    for (let i = 0; i < 3; i++) { const tuft = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.07, 6), fur); tuft.position.set((i - 1) * 0.035, 0.125, -0.02); tuft.rotation.z = (1 - i) * 0.35; tuft.rotation.x = -0.25; h.add(tuft); }   // hair tuft
+    for (const sd of [-1, 1]) { const tuft = new THREE.Mesh(new THREE.ConeGeometry(0.016, 0.05, 6), pale); tuft.position.set(sd * 0.11, -0.07, -0.02); tuft.rotation.z = sd * 2.2; h.add(tuft); }                              // cheek fluff
     // helmet: glass bubble, neck ring, comms pods and a glowing antenna
     h.add(sph(0.225, glass, 0, -0.005, 0.01));
     const neck = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.03, 8, 24), grey); neck.rotation.x = Math.PI / 2; neck.position.set(0, -0.17, 0.02); h.add(neck);
-    for (const sd of [-1, 1]) h.add(sph(0.05, grey, sd * 0.215, -0.01, 0.02, 0.6, 1, 1));              // comms pods on the sides
+    for (const sd of [-1, 1]) {
+      h.add(sph(0.05, grey, sd * 0.215, -0.01, 0.02, 0.6, 1, 1));              // comms pods on the sides
+      h.add(sph(0.012, new THREE.MeshStandardMaterial({ color: 0x7ff0ff, emissive: 0x39d8ff, emissiveIntensity: 1.4 }), sd * 0.228, 0.02, 0.02));   // pod lights
+      const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.024, 0.03, 10), grey); lamp.position.set(sd * 0.1, 0.19, -0.1); lamp.rotation.x = Math.PI / 2 - 0.3; h.add(lamp);    // helmet lamps
+      h.add(sph(0.014, new THREE.MeshStandardMaterial({ color: 0xfff4c8, emissive: 0xfff0b0, emissiveIntensity: 1.6 }), sd * 0.1, 0.195, -0.118));
+    }
+    const brim = new THREE.Mesh(new THREE.TorusGeometry(0.2, 0.009, 6, 28, Math.PI), accent); brim.rotation.set(0.35, 0, 0); brim.position.set(0, 0.075, -0.02); h.add(brim);   // thin accent ridge over the brow
+    const shine = sph(0.05, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22, depthWrite: false }), -0.09, 0.11, -0.185, 1.6, 0.5, 0.2); shine.rotation.z = 0.5; h.add(shine);   // glass glint
     const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.1, 6), grey); stalk.position.set(0.1, 0.235, 0.03); stalk.rotation.z = -0.35; h.add(stalk);
     this.bulb = sph(0.018, new THREE.MeshStandardMaterial({ color: 0x7ff0ff, emissive: 0x39d8ff, emissiveIntensity: 1.2 }), 0.125, 0.285, 0.03);
     h.add(this.bulb);
@@ -58,7 +83,7 @@ export class PlayerModel {
 
     // ---- body (follows the head's yaw, hangs under it) ----
     const b = this.bodyG;
-    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.125, 0.22, 4, 12), suit); torso.position.y = -0.34; b.add(torso);
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.125, 0.22, 4, 12), suit); torso.position.y = -0.34; b.add(torso); this.torsoMesh = torso;
     const belt = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.04, 14), grey); belt.position.y = -0.5; b.add(belt);
     const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.128, 0.128, 0.03, 14), accent); stripe.position.y = -0.43; b.add(stripe);
     const panel = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.07, 0.02), grey); panel.position.set(0, -0.3, -0.125); b.add(panel);
@@ -69,6 +94,39 @@ export class PlayerModel {
     const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, 0.05, 10), dark); nozzle.position.set(0, -0.49, 0.16); b.add(nozzle);
     this.glow = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), new THREE.MeshStandardMaterial({ color: 0xff9b3a, emissive: 0xff7a1a, emissiveIntensity: 1.5 }));
     this.glow.position.set(0, -0.53, 0.16); b.add(this.glow);
+
+    // chest emblem, collar, shoulder pads, belt gear
+    const emblem = new THREE.Mesh(new THREE.CircleGeometry(0.035, 16), accent); emblem.position.set(0.055, -0.235, -0.1295); emblem.rotation.y = Math.PI; b.add(emblem);
+    b.add(sph(0.012, pale, 0.055, -0.235, -0.131));
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.115, 0.022, 8, 22), suit); collar.rotation.x = Math.PI / 2; collar.position.y = -0.14; b.add(collar);
+    for (const sd of [-1, 1]) {
+      b.add(sph(0.062, suit, sd * 0.165, -0.2, 0.0, 1, 0.8, 1));                                        // shoulder pad
+      const patch = new THREE.Mesh(new THREE.CylinderGeometry(0.066, 0.066, 0.02, 14), accent); patch.position.set(sd * 0.168, -0.205, 0.0); patch.rotation.z = sd * 0.25; b.add(patch);
+      b.add(sph(0.017, new THREE.MeshStandardMaterial({ color: 0xffc94a, emissive: 0xffa800, emissiveIntensity: 0.9 }), sd * 0.19, -0.185, -0.04));   // shoulder beacon
+      const pouch = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.06, 0.04), grey); pouch.position.set(sd * 0.1, -0.5, -0.09); pouch.rotation.y = sd * 0.35; b.add(pouch);
+      const flap = new THREE.Mesh(new THREE.BoxGeometry(0.058, 0.012, 0.043), accent); flap.position.set(sd * 0.1, -0.472, -0.09); flap.rotation.y = sd * 0.35; b.add(flap);
+    }
+    const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.04, 0.012), new THREE.MeshStandardMaterial({ color: 0xd8c070, metalness: 0.8, roughness: 0.3 })); buckle.position.set(0, -0.5, -0.133); b.add(buckle);
+    const wrench = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.11, 6), grey); wrench.position.set(-0.13, -0.56, -0.02); wrench.rotation.z = 0.12; b.add(wrench);
+    b.add(sph(0.016, grey, -0.133, -0.5, -0.02, 1, 1, 0.6));
+    // life-support hoses: pack -> chest, over each shoulder
+    for (const sd of [-1, 1]) {
+      const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(sd * 0.07, -0.19, 0.15), new THREE.Vector3(sd * 0.1, -0.12, 0.07), new THREE.Vector3(sd * 0.115, -0.15, -0.04), new THREE.Vector3(sd * 0.085, -0.25, -0.12)]);
+      b.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 16, 0.011, 6), dark));
+      b.add(sph(0.018, grey, sd * 0.085, -0.25, -0.12));
+    }
+    // pack details: vents, light strip, little dish
+    for (let i = 0; i < 4; i++) { const v = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.008, 0.01), dark); v.position.set(0, -0.38 + i * 0.022, 0.212); b.add(v); }
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.012, 0.01), new THREE.MeshStandardMaterial({ color: 0x7ff0ff, emissive: 0x39d8ff, emissiveIntensity: 1.2 })); strip.position.set(0, -0.2, 0.212); b.add(strip);
+    const dish = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), grey); dish.position.set(0.06, -0.14, 0.17); dish.rotation.x = -0.9; b.add(dish);
+    // a monkey tail: a chain of segments that sways and curls up behind the pack
+    const tailRoot = new THREE.Group(); tailRoot.position.set(0, -0.5, 0.2); b.add(tailRoot);
+    let parent: THREE.Object3D = tailRoot;
+    for (let i = 0; i < 7; i++) {
+      const g = new THREE.Group(); g.position.z = i ? 0.07 : 0; parent.add(g); this.tail.push(g);
+      const seg = new THREE.Mesh(new THREE.CapsuleGeometry(0.03 - i * 0.0028, 0.05, 3, 8), i === 6 ? pale : fur); seg.rotation.x = Math.PI / 2; seg.position.z = 0.035; g.add(seg);
+      parent = g;
+    }
 
     // ---- arms and fists ----
     for (let i = 0; i < 2; i++) {
@@ -81,8 +139,15 @@ export class PlayerModel {
         finger.position.set((f - 1.5) * 0.026, 0.055, -0.012); finger.rotation.x = -0.5; fist.add(finger);
       }
       const thumb = new THREE.Mesh(new THREE.CapsuleGeometry(0.015, 0.04, 3, 6), suit); thumb.position.set((i ? -1 : 1) * 0.06, 0.02, -0.03); thumb.rotation.z = (i ? 1 : -1) * 0.9; fist.add(thumb);
+      for (let f = 0; f < 4; f++) {
+        const knuckle = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.012, 0.016), grey); knuckle.position.set((f - 1.5) * 0.026, 0.035, -0.04); fist.add(knuckle);   // knuckle plates
+        fist.add(sph(0.0155, dark, (f - 1.5) * 0.026, 0.103, -0.042));                                                                                              // fingertip pads
+      }
+      const wl = sph(0.014, new THREE.MeshStandardMaterial({ color: 0x7ff0ff, emissive: 0x39d8ff, emissiveIntensity: 1 }), 0, -0.045, -0.057); this.wristLights.push(wl); fist.add(wl);   // wrist light
+      const elbow = new THREE.Mesh(new THREE.TorusGeometry(0.047, 0.014, 8, 14), grey); this.elbows.push(elbow);
+      const band = new THREE.Mesh(new THREE.TorusGeometry(0.044, 0.01, 8, 14), accent); this.bands.push(band);
       this.fists.push(fist);
-      this.group.add(arm, fist);
+      this.group.add(arm, fist, elbow, band, sph(0.055, grey, 0, 0, 0)); this.shoulders.push(this.group.children[this.group.children.length - 1] as THREE.Mesh);
     }
     this.group.add(h, b);
   }
@@ -95,6 +160,14 @@ export class PlayerModel {
     this.bodyG.position.copy(head); this.bodyG.rotation.set(0, yaw, 0);
     (this.glow.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2 + Math.sin(this.t * 9) * 0.5;
     (this.bulb.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.9 + Math.sin(this.t * 3) * 0.5;
+    // blink every few seconds, breathe, and sway the tail with how fast you turn
+    this.blinkT -= dt; const blink = this.blinkT < 0.12 ? 1 : 0.02; if (this.blinkT < 0) this.blinkT = 2.5 + Math.random() * 3.5;
+    for (const lid of this.lids) lid.scale.y = blink * 0.95 + 0.02;
+    this.torsoMesh.scale.set(1, 1 + Math.sin(this.t * 1.7) * 0.012, 1 + Math.sin(this.t * 1.7) * 0.02);
+    let dy = yaw - this.lastYaw; while (dy > Math.PI) dy -= 2 * Math.PI; while (dy < -Math.PI) dy += 2 * Math.PI;
+    this.lastYaw = yaw; this.swayV += ((dt > 0 ? THREE.MathUtils.clamp(dy / dt, -4, 4) : 0) - this.swayV) * Math.min(1, dt * 6);
+    this.tail.forEach((g, i) => { g.rotation.x = -0.32 - i * 0.04 + Math.sin(this.t * 2 - i * 0.5) * 0.05; g.rotation.y = Math.sin(this.t * 1.6 - i * 0.7) * 0.18 + this.swayV * 0.09; });
+    for (const wl of this.wristLights) (wl.material as THREE.MeshStandardMaterial).emissiveIntensity = 0.8 + Math.sin(this.t * 4) * 0.4;
     const c = Math.cos(yaw), s = Math.sin(yaw);
     [left, right].forEach((hand, i) => {
       const side = i === 0 ? -1 : 1;
@@ -105,6 +178,9 @@ export class PlayerModel {
       const arm = this.arms[i];
       arm.position.copy(sh).addScaledVector(d, len / 2); arm.quaternion.copy(this.q); arm.scale.set(1, len, 1);
       this.fists[i].position.copy(hand); this.fists[i].quaternion.copy(this.q);
+      this.shoulders[i].position.copy(sh);
+      this.elbows[i].position.copy(sh).addScaledVector(d, len * 0.5); this.elbows[i].quaternion.copy(this.q); this.elbows[i].rotateX(Math.PI / 2);
+      this.bands[i].position.copy(sh).addScaledVector(d, len * 0.82); this.bands[i].quaternion.copy(this.q); this.bands[i].rotateX(Math.PI / 2);
     });
   }
 
