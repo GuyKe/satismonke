@@ -16,6 +16,8 @@ export interface TreeRec {
   pine: boolean; x: number; y: number; z: number; h: number;
   color: number; trunkIdx: number; foliageIdx: number; felled: boolean;
   trunkLocal: THREE.Matrix4; foliageLocal: THREE.Matrix4;
+  /** Puts the tree's colliders back when it regrows. */
+  addColliders?: () => void;
   hits: number; lastHit: number;
 }
 
@@ -35,7 +37,9 @@ export const ORE_DEF: Record<Ore, { color: number; rock: number; hits: number; y
   plasma: { color: 0xc04dff, rock: 0x362b48, hits: 4, yield: [1, 1], glow: 1.4 },
   uranium: { color: 0x7dff5a, rock: 0x233323, hits: 4, yield: [1, 2], glow: 1.5 },
 };
-interface OreRec { type: Ore; x: number; y: number; z: number; r: number; hits: number; broken: boolean; slot: number; purity: number }
+interface OreRec { type: Ore; x: number; y: number; z: number; r: number; hits: number; broken: boolean; slot: number; purity: number; matrix: THREE.Matrix4 }
+/** Trees and rocks (boulders and ore deposits) grow back this long after they are used up. */
+export const RESPAWN_SECONDS = 300;
 export type Loot = Partial<Record<'steel' | 'plate' | 'wire' | 'crystal' | 'core' | 'drive' | 'artifact', number>>;
 interface SiteRec { x: number; y: number; z: number; hits: number; looted: boolean; discovered: boolean; loot: Loot }
 
@@ -171,6 +175,11 @@ export class Planet {
   private trunkMesh!: THREE.InstancedMesh;
   private canopyMesh!: THREE.InstancedMesh;
   private pineMesh!: THREE.InstancedMesh;
+  /** What is waiting to grow back, oldest first. */
+  private respawnQ: { kind: 'tree' | 'boulder' | 'ore'; i: number; at: number }[] = [];
+  private respawnClock = 0;
+  /** A tree or rock grew back (multiplayer forgets it was used up). */
+  onRespawn: ((kind: Harvest, index: number) => void) | null = null;
   private falling: { rec: TreeRec; group: THREE.Group; t: number; axis: THREE.Vector3; landed: boolean }[] = [];
   /** Landmarks for the map. */
   readonly marks = { mesas: [] as [number, number, number][], buttes: [] as [number, number, number][], spires: [] as [number, number, number][], crystals: [] as [number, number][] };
@@ -420,8 +429,11 @@ export class Planet {
         m.compose(new THREE.Vector3(t.x, cy, t.z), q, new THREE.Vector3(t.cr, t.cr * 0.8, t.cr));
         rec.foliageLocal.compose(new THREE.Vector3(0, cy - t.y, 0), q, new THREE.Vector3(t.cr, t.cr * 0.8, t.cr));
         canopies.setMatrixAt(ci, m); canopies.setColorAt(ci++, col.set(palette[t.c]));
-        this.world.addCylinder(t.x, t.z, t.y - 1.5, t.y + t.h, w * 0.38, 0, i);        // bark: grippy
-        this.world.addSphere(new THREE.Vector3(t.x, cy, t.z), t.cr * 0.85, 0.2, i);     // leafy canopy
+        rec.addColliders = () => {
+          this.world.addCylinder(t.x, t.z, t.y - 1.5, t.y + t.h, w * 0.38, 0, i);        // bark: grippy
+          this.world.addSphere(new THREE.Vector3(t.x, cy, t.z), t.cr * 0.85, 0.2, i);     // leafy canopy
+        };
+        rec.addColliders();
       } else {
         const th = t.h * 0.55, w = 0.8, fh = t.h * 1.0, rad = t.cr * 0.95;
         m.compose(new THREE.Vector3(t.x, t.y - 1.5, t.z), q, new THREE.Vector3(w, th + 1.5, w)); trunks.setMatrixAt(i, m);
@@ -429,9 +441,12 @@ export class Planet {
         m.compose(new THREE.Vector3(t.x, t.y + th * 0.45, t.z), q, new THREE.Vector3(rad, fh, rad));
         rec.foliageLocal.compose(new THREE.Vector3(0, th * 0.45, 0), q, new THREE.Vector3(rad, fh, rad));
         pines.setMatrixAt(pi, m); pines.setColorAt(pi++, col.set(pinePal[t.c]));
-        this.world.addCylinder(t.x, t.z, t.y - 1.5, t.y + th + 1, w * 0.38, 0, i);
-        this.world.addSphere(new THREE.Vector3(t.x, t.y + th * 0.45 + fh * 0.3, t.z), rad * 0.5, 0.2, i);
-        this.world.addSphere(new THREE.Vector3(t.x, t.y + th * 0.45 + fh * 0.62, t.z), rad * 0.3, 0.2, i);
+        rec.addColliders = () => {
+          this.world.addCylinder(t.x, t.z, t.y - 1.5, t.y + th + 1, w * 0.38, 0, i);
+          this.world.addSphere(new THREE.Vector3(t.x, t.y + th * 0.45 + fh * 0.3, t.z), rad * 0.5, 0.2, i);
+          this.world.addSphere(new THREE.Vector3(t.x, t.y + th * 0.45 + fh * 0.62, t.z), rad * 0.3, 0.2, i);
+        };
+        rec.addColliders();
       }
     });
     this.group.add(trunks, canopies, pines);
@@ -585,7 +600,7 @@ export class Planet {
         rock.setMatrixAt(k, m); specks.setMatrixAt(k, m);
         this.world.addSphere(new THREE.Vector3(s.x, s.y + s.r * 0.35, s.z), s.r * 0.85, 0.3, ORE_OWNER + slot);
         const pr = rng();
-        this.oreRecs.push({ type, x: s.x, y: s.y, z: s.z, r: s.r, hits: 0, broken: false, slot: k, purity: pr < 0.3 ? 0.5 : pr < 0.8 ? 1 : 2 });
+        this.oreRecs.push({ type, x: s.x, y: s.y, z: s.z, r: s.r, hits: 0, broken: false, slot: k, purity: pr < 0.3 ? 0.5 : pr < 0.8 ? 1 : 2, matrix: m.clone() });
       });
       this.oreMeshes[type] = { rock, specks };
       this.group.add(rock, specks);
@@ -765,7 +780,7 @@ export class Planet {
     this.burst(at, 10, def.color, 0.2, 5);
     const amt = def.yield[0] + Math.floor(Math.random() * (def.yield[1] - def.yield[0] + 1)) + (tool === 'iron' && o.type !== 'plasma' ? 1 : 0);
     this.onOre?.(o.type, amt, at);
-    this.onHarvest?.('ore', i);
+    this.onHarvest?.('ore', i); this.scheduleRespawn('ore', i);
     return 0;
   }
 
@@ -798,15 +813,15 @@ export class Planet {
     const zero = new THREE.Matrix4().makeScale(0, 0, 0), owners = new Set<number>();
     for (const i of s.felledTrees) {
       const r = this.treeRecs[i]; if (!r) continue;
-      r.felled = true; owners.add(i);
+      r.felled = true; owners.add(i); this.scheduleRespawn('tree', i);
       this.trunkMesh.setMatrixAt(r.trunkIdx, zero); (r.pine ? this.pineMesh : this.canopyMesh).setMatrixAt(r.foliageIdx, zero);
     }
     this.trunkMesh.instanceMatrix.needsUpdate = this.canopyMesh.instanceMatrix.needsUpdate = this.pineMesh.instanceMatrix.needsUpdate = true;
-    for (const i of s.brokenBoulders) { const b = this.boulderRecs[i]; if (!b) continue; b.broken = true; owners.add(BOULDER_OWNER + i); this.boulderMesh.setMatrixAt(i, zero); }
+    for (const i of s.brokenBoulders) { const b = this.boulderRecs[i]; if (!b) continue; b.broken = true; owners.add(BOULDER_OWNER + i); this.boulderMesh.setMatrixAt(i, zero); this.scheduleRespawn('boulder', i); }
     this.boulderMesh.instanceMatrix.needsUpdate = true;
     for (const i of s.brokenCrystals) { const c = this.crystalRecs[i]; if (!c) continue; c.broken = true; owners.add(CRYSTAL_OWNER + i); this.crystalMesh.setMatrixAt(i, zero); }
     this.crystalMesh.instanceMatrix.needsUpdate = true;
-    for (const i of s.brokenOres) { const o = this.oreRecs[i]; if (!o) continue; o.broken = true; owners.add(ORE_OWNER + i); this.hideOre(o); }
+    for (const i of s.brokenOres) { const o = this.oreRecs[i]; if (!o) continue; o.broken = true; owners.add(ORE_OWNER + i); this.hideOre(o); this.scheduleRespawn('ore', i); }
     for (const i of s.lootedSites ?? []) { const t = this.siteRecs[i]; if (!t) continue; t.looted = true; owners.add(CRASH_OWNER + i); this.siteMesh.setMatrixAt(i, zero); this.siteLights.setMatrixAt(i, zero); }
     for (const i of s.discoveredZones ?? []) this.zoneFound.add(i);
     for (const i of s.discoveredSites ?? []) { const t = this.siteRecs[i]; if (t) t.discovered = true; }
@@ -944,8 +959,49 @@ export class Planet {
   get cycleTime(): number { return this.clock % CYCLE; }
   get isDay(): boolean { return this.cycleTime < DAY_SECONDS; }
 
+  private scheduleRespawn(kind: 'tree' | 'boulder' | 'ore', i: number): void { this.respawnQ.push({ kind, i, at: this.respawnClock + RESPAWN_SECONDS }); }
+
+  /** Grow one used-up tree or rock back, unless the player is standing right there. Returns false to try again later. */
+  private respawn(e: { kind: 'tree' | 'boulder' | 'ore'; i: number }, head: THREE.Vector3): boolean {
+    if (e.kind === 'tree') {
+      const r = this.treeRecs[e.i]; if (!r || !r.felled) return true;
+      if (Math.hypot(head.x - r.x, head.z - r.z) < 6) return false;
+      r.felled = false; r.hits = 0; r.lastHit = -99;
+      const w = new THREE.Matrix4().makeTranslation(r.x, r.y, r.z);
+      this.trunkMesh.setMatrixAt(r.trunkIdx, w.clone().multiply(r.trunkLocal)); this.trunkMesh.instanceMatrix.needsUpdate = true;
+      const fol = r.pine ? this.pineMesh : this.canopyMesh; fol.setMatrixAt(r.foliageIdx, w.clone().multiply(r.foliageLocal)); fol.instanceMatrix.needsUpdate = true;
+      r.addColliders?.();
+      this.burst(new THREE.Vector3(r.x, r.y + 2, r.z), 5, r.color, 0.18, 3);
+    } else if (e.kind === 'boulder') {
+      const b = this.boulderRecs[e.i]; if (!b || !b.broken) return true;
+      if (Math.hypot(head.x - b.x, head.z - b.z) < b.r + 4) return false;
+      b.broken = false; b.hits = 0;
+      this.boulderMesh.setMatrixAt(e.i, b.matrix); this.boulderMesh.instanceMatrix.needsUpdate = true;
+      this.world.addSphere(new THREE.Vector3(b.x, b.y + b.r * 0.3, b.z), b.r * 0.78, 0.3, BOULDER_OWNER + e.i);
+      this.burst(new THREE.Vector3(b.x, b.y + b.r * 0.5, b.z), 5, 0x9a90a8, 0.2 * b.r, 3);
+    } else {
+      const o = this.oreRecs[e.i]; if (!o || !o.broken) return true;
+      if (Math.hypot(head.x - o.x, head.z - o.z) < o.r + 4) return false;
+      o.broken = false; o.hits = 0;
+      const mm = this.oreMeshes[o.type]; mm.rock.setMatrixAt(o.slot, o.matrix); mm.specks.setMatrixAt(o.slot, o.matrix);
+      mm.rock.instanceMatrix.needsUpdate = mm.specks.instanceMatrix.needsUpdate = true;
+      this.world.addSphere(new THREE.Vector3(o.x, o.y + o.r * 0.35, o.z), o.r * 0.85, 0.3, ORE_OWNER + e.i);
+      this.burst(new THREE.Vector3(o.x, o.y + o.r * 0.6, o.z), 5, ORE_DEF[o.type].color, 0.16, 3);
+    }
+    this.world.finalize();   // new colliders are only seen once the spatial hash is rebuilt
+    return true;
+  }
+
   update(dt: number, scene: THREE.Scene, follow: THREE.Vector3, head: THREE.Vector3): void {
     this.clock += dt;
+    // grow things back, one per frame so a big batch does not stall
+    this.respawnClock += dt;
+    const next = this.respawnQ[0];
+    if (next && this.respawnClock >= next.at) {
+      this.respawnQ.shift();
+      if (this.respawn(next, head)) this.onRespawn?.(next.kind, next.i);
+      else this.respawnQ.push({ ...next, at: this.respawnClock + 10 });
+    }
     this.animalTime += dt;
 
     // Saturn's arc: DAY_SECONDS above the horizon, NIGHT_SECONDS below it.
@@ -1248,7 +1304,7 @@ export class Planet {
     f.normalize();
     // rotating about (f.z, 0, -f.x) tips the tree's up-vector toward f
     this.falling.push({ rec, group, t: 0, axis: new THREE.Vector3(f.z, 0, -f.x), landed: false });
-    this.onHarvest?.('tree', id);
+    this.onHarvest?.('tree', id); this.scheduleRespawn('tree', id);
     return true;
   }
 
@@ -1263,12 +1319,12 @@ export class Planet {
       r.felled = true; this.world.removeOwner(i);
       this.trunkMesh.setMatrixAt(r.trunkIdx, zero); this.trunkMesh.instanceMatrix.needsUpdate = true;
       const fol = r.pine ? this.pineMesh : this.canopyMesh; fol.setMatrixAt(r.foliageIdx, zero); fol.instanceMatrix.needsUpdate = true;
-      this.burst(new THREE.Vector3(r.x, r.y + 2, r.z), 6, r.color, 0.2, 4);
+      this.burst(new THREE.Vector3(r.x, r.y + 2, r.z), 6, r.color, 0.2, 4); this.scheduleRespawn('tree', i);
     } else if (kind === 'boulder') {
       const b = this.boulderRecs[i]; if (!b || b.broken) return;
       b.broken = true; this.world.removeOwner(BOULDER_OWNER + i);
       this.boulderMesh.setMatrixAt(i, zero); this.boulderMesh.instanceMatrix.needsUpdate = true;
-      this.burst(new THREE.Vector3(b.x, b.y + b.r * 0.5, b.z), 8, 0x9a90a8, 0.28 * b.r, 5);
+      this.burst(new THREE.Vector3(b.x, b.y + b.r * 0.5, b.z), 8, 0x9a90a8, 0.28 * b.r, 5); this.scheduleRespawn('boulder', i);
     } else if (kind === 'crystal') {
       const c = this.crystalRecs[i]; if (!c || c.broken) return;
       c.broken = true; this.world.removeOwner(CRYSTAL_OWNER + i);
@@ -1277,7 +1333,7 @@ export class Planet {
     } else if (kind === 'ore') {
       const o = this.oreRecs[i]; if (!o || o.broken) return;
       o.broken = true; this.world.removeOwner(ORE_OWNER + i); this.hideOre(o);
-      this.burst(new THREE.Vector3(o.x, o.y + o.r * 0.6, o.z), 8, ORE_DEF[o.type].color, 0.2, 5);
+      this.burst(new THREE.Vector3(o.x, o.y + o.r * 0.6, o.z), 8, ORE_DEF[o.type].color, 0.2, 5); this.scheduleRespawn('ore', i);
     } else {
       const s = this.siteRecs[i]; if (!s || s.looted) return;
       s.looted = true; s.discovered = true; this.world.removeOwner(CRASH_OWNER + i);
@@ -1325,7 +1381,7 @@ export class Planet {
     this.boulderMesh.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); this.boulderMesh.instanceMatrix.needsUpdate = true;
     this.burst(at, 9, 0x9a90a8, 0.28 * b.r, 5);
     this.onStone?.(Math.max(2, Math.round(b.r * 1.4)), at);
-    this.onHarvest?.('boulder', i);
+    this.onHarvest?.('boulder', i); this.scheduleRespawn('boulder', i);
     return 0;
   }
 

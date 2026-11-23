@@ -256,6 +256,12 @@ export class Net {
     this.worldSeen.add(key); this.worldLog.push(d ? [k, i, d] : [k, i]); return true;
   }
 
+  /** A used-up tree or rock grew back: forget it was used up (so it can be used up again and late joiners do not remove it). */
+  forgetWorld(k: string, i: number): void {
+    this.worldSeen.delete(k + ':' + i);
+    this.worldLog = this.worldLog.filter(e => !(e[0] === k && e[1] === i && !e[2]));
+  }
+
   /** Clients: ask the host to do something and get its answer. (The host just does things itself.) */
   sendOp(op: Op, done: (r: Op) => void): void {
     const c = this.conns.get('host');
