@@ -330,12 +330,15 @@ export class Planet {
     this.group.add(this.celestial, this.sun, this.sun.target, this.hemi);
   }
 
+  /** In the crowded jungle: is there a tree trunk within r of (x, z)? Set once the trees are built, so rocks and ores stay reachable. */
+  private treeNear: ((x: number, z: number, r: number) => boolean) | null = null;
+
   /** Random spot on dry land within [rMin, rMax] of the landing site. */
   private dryPoint(rng: () => number, rMin: number, rMax: number, minH = ABOVE_WATER): { x: number; z: number; h: number } {
     for (let i = 0; i < 60; i++) {
       const a = rng() * Math.PI * 2, r = rMin + rng() * (rMax - rMin);
       const x = Math.cos(a) * r, z = Math.sin(a) * r, h = heightAt(x, z);
-      if (h > minH && pathMask(x, z) < 0.5) return { x, z, h };
+      if (h > minH && pathMask(x, z) < 0.5 && !(this.treeNear && this.treeNear(x, z, 2.8))) return { x, z, h };
     }
     return { x: rMin, z: 0, h: 0 };
   }
@@ -384,13 +387,33 @@ export class Planet {
   private buildTrees(rng: () => number): void {
     type Spot = { x: number; z: number; y: number; h: number; cr: number; c: number; pine: boolean };
     const spots: Spot[] = [];
-    const GAP = this.map.treeGap;
+    const GAP = this.map.treeGap, crowded = this.map.id === 'jungle';
+    // open fields cut out of the forest: a big one around the landing site (the Hub needs room) and a few more
+    const clearings: { x: number; z: number; r: number }[] = [];
+    if (crowded) {
+      clearings.push({ x: 0, z: 0, r: 30 });
+      for (let k = 0, tries = 0; k < (this.map.clearings ?? 0) && tries < 80; tries++) {
+        const c = this.dryPoint(rng, 70, WORLD_R - 50, ABOVE_WATER + 3), r = 20 + rng() * 22;
+        if (clearings.some(o => Math.hypot(o.x - c.x, o.z - c.z) < o.r + r + 50)) continue;
+        clearings.push({ x: c.x, z: c.z, r }); k++;
+      }
+    }
+    // spatial grid so thousands of trees can be placed quickly (same answer as checking every tree)
+    const CELL = Math.ceil(GAP * 1.5) + 1, grid = new Map<number, Spot[]>(), gk = (i: number, j: number) => i * 4096 + j;
+    const tooClose = (x: number, z: number, gap: number): boolean => {
+      const ci = Math.floor(x / CELL), cj = Math.floor(z / CELL);
+      for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) for (const t of grid.get(gk(i, j)) ?? []) if (Math.hypot(t.x - x, t.z - z) < gap) return true;
+      return false;
+    };
     const tryAdd = (x: number, z: number, gap = GAP): boolean => {
       const y = heightAt(x, z);
       if (y < ABOVE_WATER + 0.5 || Math.hypot(x, z) < 14 || pathMask(x, z) > 0.4) return false;
-      if (spots.some(t => Math.hypot(t.x - x, t.z - z) < gap)) return false;
+      if (clearings.some(c => Math.hypot(c.x - x, c.z - z) < c.r)) return false;
+      if (tooClose(x, z, gap)) return false;
       const big = this.map.id === 'jungle' ? 1.35 : 1;   // jungle trees tower
-      spots.push({ x, z, y, h: (6 + rng() * 6) * big, cr: (2.2 + rng() * 1.4) * (big > 1 ? 1.2 : 1), c: Math.floor(rng() * 4), pine: rng() < 0.45 });
+      const sp = { x, z, y, h: (6 + rng() * 6) * big, cr: (2.2 + rng() * 1.4) * (big > 1 ? 1.2 : 1), c: Math.floor(rng() * 4), pine: rng() < 0.45 };
+      spots.push(sp);
+      const key = gk(Math.floor(x / CELL), Math.floor(z / CELL)); const cell = grid.get(key); if (cell) cell.push(sp); else grid.set(key, [sp]);
       return true;
     };
     const maxTrees = Math.round(230 * this.q.trees * this.map.trees);
@@ -404,15 +427,22 @@ export class Planet {
     }
     for (let k = 0; k < Math.round(90 * this.map.trees) && spots.length < maxTrees; k++) { const p = this.dryPoint(rng, 18, WORLD_R); tryAdd(p.x, p.z, Math.round(GAP * 1.5)); }
 
+    // the crowded jungle: keep packing trees in until the world is thick with them, leaving just narrow ways through
+    if (crowded) for (let k = 0; k < maxTrees * 7 && spots.length < maxTrees; k++) {
+      const a = rng() * Math.PI * 2, r = 14 + Math.sqrt(rng()) * (WORLD_R - 14);
+      tryAdd(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    if (crowded) this.treeNear = (x, z, r) => tooClose(x, z, r + 0.6);
+
     const pineGeo = mergeGeometries([
-      new THREE.ConeGeometry(1.0, 0.5, 8).translate(0, 0.25, 0),
-      new THREE.ConeGeometry(0.75, 0.45, 8).translate(0, 0.55, 0),
-      new THREE.ConeGeometry(0.5, 0.4, 8).translate(0, 0.82, 0),
+      new THREE.ConeGeometry(1.0, 0.5, crowded ? 6 : 8).translate(0, 0.25, 0),
+      new THREE.ConeGeometry(0.75, 0.45, crowded ? 6 : 8).translate(0, 0.55, 0),
+      new THREE.ConeGeometry(0.5, 0.4, crowded ? 6 : 8).translate(0, 0.82, 0),
     ].map(g => g.toNonIndexed()))!;
     const trunkMat = new THREE.MeshStandardMaterial({ color: this.map.trunk, roughness: 0.95 });
-    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.3, 0.46, 1, 8).translate(0, 0.5, 0), trunkMat, spots.length);
+    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.3, 0.46, 1, crowded ? 6 : 8).translate(0, 0.5, 0), trunkMat, spots.length);
     const nPine = spots.filter(s => s.pine).length;
-    const canopies = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshStandardMaterial({ roughness: 0.7 }), spots.length - nPine);
+    const canopies = new THREE.InstancedMesh(crowded ? new THREE.SphereGeometry(1, 8, 6) : new THREE.SphereGeometry(1, 16, 12), new THREE.MeshStandardMaterial({ roughness: 0.7 }), spots.length - nPine);
     const pines = new THREE.InstancedMesh(pineGeo, new THREE.MeshStandardMaterial({ roughness: 0.8, flatShading: true }), nPine);
     const palette = this.map.treePalette, pinePal = this.map.pinePalette;
     const m = new THREE.Matrix4(), col = new THREE.Color(), q = new THREE.Quaternion();
@@ -553,7 +583,7 @@ export class Planet {
         const c = this.dryPoint(rng, 20, WORLD_R, ABOVE_WATER + 0.5);
         for (let k = 0; k < per; k++) {
           const a = rng() * Math.PI * 2, d = 1.5 + rng() * 7, x = c.x + Math.cos(a) * d, z = c.z + Math.sin(a) * d, y = heightAt(x, z);
-          if (y > ABOVE_WATER && pathMask(x, z) < 0.5) spots.push({ type, x, y, z, r: rMin + rng() * (rMax - rMin) });
+          if (y > ABOVE_WATER && pathMask(x, z) < 0.5 && !(this.treeNear && this.treeNear(x, z, 2.4))) spots.push({ type, x, y, z, r: rMin + rng() * (rMax - rMin) });
         }
       }
     };

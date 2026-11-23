@@ -1057,7 +1057,7 @@ async function boot() {
           const left = planet!.hitBoulder(id - BOULDER_OWNER, progress.has('pickaxe') ? 1 : BOULDER_HITS);
           if (left) sfx.clink(); buzz(i, 1, 90);
         } else {
-          const left = planet!.hitTree(id, headW, progress.has('axe') ? 1 : TREE_HITS);
+          const left = planet!.hitTree(id, headW, planet!.map.treeHits ?? (progress.has('axe') ? 1 : TREE_HITS));
           sfx.chop(); buzz(i, 1, 90);
           if (left > 0) toast(`${left} more hit`, new THREE.Vector3(planet!.trees[id].x, planet!.trees[id].y + 2, planet!.trees[id].z));
         }

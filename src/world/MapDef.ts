@@ -23,6 +23,10 @@ export interface MapDef {
   canyons: number;
   lakes: Lake[]; ponds: Lake[]; rivers: RiverDef[];
   // ---- how much of everything (1 = the grassy plains) ----
+  /** Punches a tree takes (missing: the usual 2, or 1 with an axe). */
+  treeHits?: number;
+  /** Open fields cut out of the forest (jungle). */
+  clearings?: number;
   trees: number; treeGap: number; clusters: number; boulders: number; ores: number; crystals: number; mush: number; grass: number; sites: number; animals: number;
   // ---- colours ----
   groundA: number; groundB: number; sand: number; dirt: [number, number, number];
@@ -79,7 +83,8 @@ export const MAPS: Record<MapId, MapDef> = {
     lakes: [{ x: 0, z: -560, r: 250, depth: 20 }, { x: -430, z: 170, r: 110, depth: 15 }, { x: 420, z: 300, r: 100, depth: 14 }],
     ponds: PLAINS_PONDS.filter((_, i) => i % 2 === 0).map(p => ({ ...p, r: p.r * 0.7 })),
     rivers: PLAINS_RIVERS.map(r => ({ ...r, width: r.width * 0.65 })),
-    trees: 7, treeGap: 5, clusters: 6.5, boulders: 2, ores: 2.4, crystals: 2.2, mush: 1.6, grass: 1.2, sites: 1.5, animals: 1.2,
+    treeHits: 6, clearings: 10,
+    trees: 39, treeGap: 2.8, clusters: 6.5, boulders: 2, ores: 2.4, crystals: 2.2, mush: 1.6, grass: 1.2, sites: 1.5, animals: 1.2,
     groundA: 0x2fb870, groundB: 0x178a5a, sand: 0x6a8a52, dirt: [0.34, 0.26, 0.16],
     grassHsl: [0.36, 0.1, 0.65, 0.34],
     treePalette: [0x1fbf6a, 0x14935b, 0x7fe05a, 0x2fd1a0], pinePalette: [0x0f7a55, 0x1da07a, 0x58c46a, 0x2d8c6a], trunk: 0x6b4a2f,
