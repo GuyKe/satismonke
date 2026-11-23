@@ -260,6 +260,7 @@ async function boot() {
     pl.onRoar = (pos, kind) => { sfx.roar(pos, kind); chat(kind === 'serpent' ? 'roar_serpent' : kind === 'manta' ? 'roar_manta' : 'creature', 90, true); };
     pl.onTreeLanded = pos => sfx.thump(pos);
     pl.onHarvest = (k, i) => net.sendWorld(k, i);
+    pl.onRespawn = (k, i) => net.forgetWorld(k, i);
     pl.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); progress.treesFelled++; sfx.pickup(); toast(`+${k} wood`, pos); first('firstWood'); if (progress.treesFelled % 6 === 0) chat('chop', 40, true); if (progress.items.wood >= 50) first('milestoneWood'); };
     pl.onStone = (n, pos) => { const k = n + (progress.has('ironpick') ? 2 : progress.has('pickaxe') ? 1 : 0); progress.add('stone', k); progress.bouldersBroken++; sfx.crumble(); toast(`+${k} stone`, pos); first('firstStone'); if (progress.bouldersBroken % 5 === 0) chat('rock', 40, true); };
     pl.onCrystal = (n, pos) => { progress.add('crystal', n); sfx.crumble(); sfx.pickup(); toast(`+${n} crystal`, pos); first('firstCrystal'); };
