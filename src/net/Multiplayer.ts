@@ -1,4 +1,5 @@
 import Peer, { DataConnection, PeerOptions } from 'peerjs';
+import type { MapId } from '../world/MapDef';
 
 /** Unambiguous characters for lobby codes (no 0/O/1/I). */
 export const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -15,7 +16,7 @@ export type Pose = number[];
 export type Op = Record<string, unknown>;
 export type WorldEvent = [string, number, number[]?];
 /** What hosting a saved realm needs from its save. */
-export interface RealmSeed { code: string; maxPlayers: number; members: Record<string, { name: string; color: number }>; progressOf: Record<string, { progress: unknown; pos: number[] | null }> }
+export interface RealmSeed { map?: MapId; code: string; maxPlayers: number; members: Record<string, { name: string; color: number }>; progressOf: Record<string, { progress: unknown; pos: number[] | null }> }
 
 type Msg =
   | { t: 'hello'; name: string; color: number; pid: string; look?: PlayerLook }
@@ -24,10 +25,10 @@ type Msg =
   | { t: 'saveReq' }
   | { t: 'prog'; d: unknown; pos: number[] }
   | { t: 'saved'; code: string; host: string }
-  | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[]; world: WorldEvent[] }
+  | { t: 'welcome'; id: string; clock: number; started: boolean; players: PlayerInfo[]; world: WorldEvent[]; map?: MapId }
   | { t: 'join'; p: PlayerInfo }
   | { t: 'leave'; id: string }
-  | { t: 'start'; clock: number; world?: WorldEvent[] }
+  | { t: 'start'; clock: number; world?: WorldEvent[]; map?: MapId }
   | { t: 'clock'; clock: number }
   | { t: 'w'; k: string; i: number; d?: number[] }
   | { t: 'op'; rid: number; op: Op }
@@ -91,6 +92,8 @@ export class Net {
   /** Host settings for this lobby. */
   allowSaving = false;
   maxPlayers = 8;
+  /** The map the lobby plays on (the host chooses; everyone builds the same world). */
+  map: MapId = 'plains';
   /** Realm members (by player id): once a lobby has been saved, only they can join it. null = open lobby. */
   members: Map<string, { name: string; color: number }> | null = null;
   /** Host: saved progress of members, handed back when they rejoin. */
@@ -137,7 +140,7 @@ export class Net {
   host(attempt = 0, realm?: RealmSeed): void {
     this.leave(true);
     this.state = 'connecting'; this.isHost = true; this.error = ''; this.code = attempt > 0 || !realm ? randomCode() : realm.code; this.onChange();
-    if (realm) { this.members = new Map(Object.entries(realm.members)); this.allowSaving = true; this.maxPlayers = realm.maxPlayers; for (const [pid, v] of Object.entries(realm.progressOf)) this.memberData.set(pid, v); }
+    if (realm) { this.members = new Map(Object.entries(realm.members)); this.allowSaving = true; this.maxPlayers = realm.maxPlayers; this.map = realm.map ?? 'plains'; for (const [pid, v] of Object.entries(realm.progressOf)) this.memberData.set(pid, v); }
     const peer = new Peer(PREFIX + this.code, this.peerOptions());
     this.peer = peer;
     peer.on('open', id => {
@@ -176,7 +179,7 @@ export class Net {
 
   leave(quiet = false): void {
     this.peer?.destroy(); this.peer = null; this.conns.clear(); this.players.clear();
-    this.members = null; this.allowSaving = false; this.maxPlayers = 8; this.memberData.clear(); this.restoreData = null; this.peerPid.clear();
+    this.members = null; this.allowSaving = false; this.maxPlayers = 8; this.map = 'plains'; this.memberData.clear(); this.restoreData = null; this.peerPid.clear();
     this.state = 'off'; this.isHost = false; this.code = ''; this.worldLog = []; this.worldSeen.clear(); this.pendingOps.clear(); this.lastFactory = this.lastBuild = null;
     if (!quiet) this.onChange();
   }
@@ -185,7 +188,7 @@ export class Net {
   start(): void {
     if (!this.isHost || this.state !== 'lobby') return;
     this.state = 'game';
-    this.broadcast({ t: 'start', clock: this.getClock(), world: this.worldLog });
+    this.broadcast({ t: 'start', clock: this.getClock(), world: this.worldLog, map: this.map });
     this.onStart(this.getClock()); this.onChange();
   }
 
@@ -199,7 +202,7 @@ export class Net {
         const lk = m.look, p: PlayerInfo = { id: c.peer, name: String(m.name).slice(0, 20), color: m.color | 0, look: lk ? { suit: lk.suit | 0, hat: String(lk.hat).slice(0, 12), badge: String(lk.badge).slice(0, 12) } : undefined };
         this.players.set(p.id, p); this.conns.set(p.id, c); this.peerPid.set(p.id, pid);
         const mem = this.memberData.get(pid); if (mem) c.send({ t: 'restore', d: mem.progress, pos: mem.pos } as Msg);
-        c.send({ t: 'welcome', id: p.id, clock: this.getClock(), started: this.state === 'game', players: this.list, world: this.worldLog } as Msg);
+        c.send({ t: 'welcome', id: p.id, clock: this.getClock(), started: this.state === 'game', players: this.list, world: this.worldLog, map: this.map } as Msg);
         this.broadcast({ t: 'join', p } as Msg, p.id);
         if (this.state === 'game') { const s = this.snapshots(); c.send({ t: 'fs', d: s.f } as Msg); c.send({ t: 'bs', d: s.b } as Msg); }
         this.onChange();
@@ -228,12 +231,13 @@ export class Net {
       case 'welcome':
         this.players.clear(); for (const p of m.players) this.players.set(p.id, p); this.players.set(this.me.id, this.me);
         for (const [k, i, d] of m.world ?? []) this.logWorld(k, i, d);
+        this.map = m.map ?? 'plains';
         this.state = m.started ? 'game' : 'lobby'; this.onChange();
         if (m.started) this.onStart(m.clock);
         break;
       case 'join': this.players.set(m.p.id, m.p); this.onChange(); break;
       case 'leave': this.players.delete(m.id); this.onLeave(m.id); this.onChange(); break;
-      case 'start': for (const [k, i, d] of m.world ?? []) this.logWorld(k, i, d); this.state = 'game'; this.onStart(m.clock); this.onChange(); break;
+      case 'start': this.map = m.map ?? this.map; for (const [k, i, d] of m.world ?? []) this.logWorld(k, i, d); this.state = 'game'; this.onStart(m.clock); this.onChange(); break;
       case 'clock': this.onClock(m.clock); break;
       case 'reject': this.fail(m.msg); break;
       case 'restore': this.restoreData = { progress: m.d, pos: m.pos }; break;

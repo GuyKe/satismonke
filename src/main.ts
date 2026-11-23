@@ -12,6 +12,8 @@ import { D } from './ui/dialogue';
 import { Net, playerId } from './net/Multiplayer';
 import type { RealmSeed } from './net/Multiplayer';
 import { Voice } from './net/Voice';
+import { setMap } from './world/Terrain';
+import { MapId, isMapId } from './world/MapDef';
 import { LoadingScreen } from './ui/LoadingScreen';
 import { Look, loadLook, saveLook } from './game/Cosmetics';
 import { RemotePlayers } from './world/RemotePlayers';
@@ -228,6 +230,7 @@ async function boot() {
   // ---- Game state: main menu <-> game ----
   let appMode: 'menu' | 'game' = 'menu';
   let planet: Planet | null = null;
+  let currentMap: MapId = 'plains';
   let currentSlot = 0, playSeconds = 0, autosave = 0, pauseOpen = false;
   const MENU_SPAWN = new THREE.Vector3(0, 0, 2.4);
 
@@ -313,7 +316,8 @@ async function boot() {
 
   /** Land on the planet: a fresh landing (d = null) or a loaded save. */
   const startPlanet = (d: SaveData | null) => {
-    const pl = new Planet(7, d?.planet?.quality ?? settings.graphics); planet = pl;
+    setMap(currentMap);
+    const pl = new Planet(undefined, d?.planet?.quality ?? settings.graphics); planet = pl;
     ship.visible = false;
     scene.add(pl.group);
     player.world = pl.world;
@@ -346,7 +350,7 @@ async function boot() {
   const buildSave = (): SaveData => {
     const onPlanet = !!planet && (story.phase === 'planet' || story.phase === 'landing');
     return {
-      version: 2, savedAt: Date.now(), playSeconds: Math.round(playSeconds),
+      version: 2, map: currentMap, savedAt: Date.now(), playSeconds: Math.round(playSeconds),
       phase: onPlanet ? 'planet' : 'capsule', objective: onPlanet ? progress.objective()[0] : 'In the pod',
       progress: progress.toJSON(), player: { x: player.position.x, y: player.position.y, z: player.position.z },
       planet: onPlanet ? { ...planet!.exportState(), factory: factory.toJSON(), build: buildSystem?.toJSON() } : null,
@@ -390,7 +394,7 @@ async function boot() {
   scene.add(remotes.group);
   const voice = new Voice();
   const lobbyInfo = () => net.state === 'off' ? null : {
-    allowSaving: net.allowSaving, maxPlayers: net.maxPlayers, realm: net.members !== null, mic: voice.state, code: net.code, isHost: net.isHost, status: net.state, error: net.error,
+    map: net.map, allowSaving: net.allowSaving, maxPlayers: net.maxPlayers, realm: net.members !== null, mic: voice.state, code: net.code, isHost: net.isHost, status: net.state, error: net.error,
     players: net.list.map(p => ({ name: p.name + (p.id === net.me.id ? ' (you)' : ''), color: p.color })),
   };
   const refreshLobby = () => {
@@ -439,6 +443,7 @@ async function boot() {
     resetGame();
     currentSlot = -1; appMode = 'game'; menuRoom.group.visible = false; autosave = 0; playSeconds = 0;
     const realmWorld = net.isHost ? pendingRealm?.world ?? null : null;
+    currentMap = realmWorld ? (realmWorld.planet?.map ?? realmWorld.map ?? 'plains') : net.map;
     startPlanet(realmWorld && realmWorld.planet ? realmWorld : null); story.phase = 'planet';
     if (net.isHost && realmWorld) playSeconds = realmWorld.playSeconds;
     if (planet) { if (!realmWorld) planet.clock = clock; for (const [k, i, d] of net.worldLog) applyWorldEvent(k, i, d); if (!net.isHost) { if (net.lastFactory) applyFactoryState(net.lastFactory); if (net.lastBuild && buildSystem) buildSystem.load(net.lastBuild as BuildState); } }
@@ -508,8 +513,9 @@ async function boot() {
     loading.show(); loadJob = job; loadFrames = 0; loadMin = fastLoad ? 0 : minSeconds;
   };
 
-  const beginGame = (slot: number, mode: 'new' | 'load') => {
+  const beginGame = (slot: number, mode: 'new' | 'load', map?: MapId) => {
     const d = mode === 'load' ? readSlot(slot) : null;
+    currentMap = d ? (d.planet?.map ?? d.map ?? 'plains') : (map ?? 'plains');
     resetGame();
     currentSlot = slot; appMode = 'game'; menuRoom.group.visible = false; autosave = 0;
     playSeconds = d ? d.playSeconds : 0;
@@ -541,7 +547,8 @@ async function boot() {
   scene.add(menuRoom.group);
   menuRoom.group.visible = false;
   const handlers: MenuHandlers = {
-    onStart: (slot, mode) => { const d = mode === 'load' ? readSlot(slot) : null; if (d && d.phase === 'planet') withLoading(() => beginGame(slot, mode)); else beginGame(slot, mode); },
+    onStart: (slot, mode, map) => { const d = mode === 'load' ? readSlot(slot) : null; if (d && d.phase === 'planet') withLoading(() => beginGame(slot, mode, map)); else beginGame(slot, mode, map); },
+    onPickMap: m => { if (net.isHost) { net.map = m; refreshLobby(); } },
     onDelete: slot => deleteSlot(slot),
     onResume: () => togglePause(false),
     onSave: () => {
@@ -564,7 +571,7 @@ async function boot() {
     onToggleSaving: () => { if (net.isHost) { net.allowSaving = !net.allowSaving; refreshLobby(); } },
     onCycleMax: () => { if (net.isHost) { net.maxPlayers = net.maxPlayers >= 8 ? 2 : net.maxPlayers + 1; refreshLobby(); } },
     realms: realmEntries,
-    onRealmHost: code => { const r = readRealm(code); if (!r) return; pendingRealm = r; const seed: RealmSeed = { code: r.code, maxPlayers: r.maxPlayers, members: r.members, progressOf: r.progressOf as RealmSeed['progressOf'] }; net.host(0, seed); },
+    onRealmHost: code => { const r = readRealm(code); if (!r) return; pendingRealm = r; const seed: RealmSeed = { map: r.world.planet?.map ?? r.world.map ?? 'plains', code: r.code, maxPlayers: r.maxPlayers, members: r.members, progressOf: r.progressOf as RealmSeed['progressOf'] }; net.host(0, seed); },
     onRealmJoin: code => net.join(code),
     onRealmRemove: (code, kind) => { if (kind === 'host') deleteRealm(code); else forgetJoined(code); },
     getLook: () => look,
@@ -669,7 +676,7 @@ async function boot() {
     renderer.setSize(innerWidth, innerHeight);
   });
 
-  if (debugSkip === 'planet') { appMode = 'game'; menuRoom.group.visible = false; startPlanet(null); story.phase = 'planet'; }
+  if (debugSkip === 'planet') { const mp = new URLSearchParams(location.search).get('map'); if (isMapId(mp)) currentMap = mp; appMode = 'game'; menuRoom.group.visible = false; startPlanet(null); story.phase = 'planet'; }
   else enterMainMenu(false);
 
   // ---- Alarm lighting ----
