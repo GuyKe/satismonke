@@ -31,14 +31,16 @@ export class PlayerModel {
   private t = Math.random() * 10;
   private tmp = new THREE.Vector3(); private tmp2 = new THREE.Vector3(); private q = new THREE.Quaternion();
 
-  constructor(color: number, opts: { head?: boolean } = {}) {
+  private spinners: THREE.Object3D[] = [];
+
+  constructor(color: number, opts: { head?: boolean; suit?: number; hat?: string; badge?: string } = {}) {
     const fur = new THREE.MeshStandardMaterial({ color, roughness: 0.95 });
     const dark = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.55), roughness: 0.95 });
     const pale = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).lerp(new THREE.Color(0xf0dcc0), 0.7), roughness: 0.9 });
     const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 });
     const black = new THREE.MeshStandardMaterial({ color: 0x0a0a12, roughness: 0.2 });
     const teal = new THREE.MeshStandardMaterial({ color: 0x1fb5a8, roughness: 0.5 });
-    const suit = new THREE.MeshStandardMaterial({ color: 0xe9edf5, roughness: 0.65, metalness: 0.05 });     // white suit fabric
+    const suit = new THREE.MeshStandardMaterial({ color: opts.suit ?? 0xe9edf5, roughness: 0.65, metalness: 0.05 });     // white suit fabric
     const grey = new THREE.MeshStandardMaterial({ color: 0x8b95a8, roughness: 0.5, metalness: 0.4 });      // joints, rings, pack
     const accent = new THREE.MeshStandardMaterial({ color, roughness: 0.5 });                              // stripe: the player's colour
     const glass = new THREE.MeshPhysicalMaterial({ color: 0x9fd8ff, roughness: 0.05, transparent: true, opacity: 0.22, metalness: 0, side: THREE.DoubleSide, depthWrite: false });
@@ -84,6 +86,31 @@ export class PlayerModel {
     const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.1, 6), grey); stalk.position.set(0.1, 0.235, 0.03); stalk.rotation.z = -0.35; h.add(stalk);
     this.bulb = sph(0.018, new THREE.MeshStandardMaterial({ color: 0x7ff0ff, emissive: 0x39d8ff, emissiveIntensity: 1.2 }), 0.125, 0.285, 0.03);
     h.add(this.bulb);
+    // hats sit on top of the helmet
+    const hatMat = (c: number) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.7 });
+    if (opts.hat === 'party') {
+      const hat = new THREE.Group(); hat.position.set(0.03, 0.2, 0.02); hat.rotation.z = -0.18; h.add(hat);
+      const cols = [0xff4fa0, 0xffd23a, 0x4fd0ff, 0xff4fa0, 0xffd23a];
+      cols.forEach((c, i) => {
+        const r0 = 0.115 * (1 - i / cols.length), r1 = 0.115 * (1 - (i + 1) / cols.length), seg = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, 0.055, 18), hatMat(c));
+        seg.position.y = 0.0275 + i * 0.055; hat.add(seg);
+      });
+      hat.add(sph(0.026, hatMat(0xffffff), 0, 0.29, 0));                       // pom-pom
+      for (let i = 0; i < 9; i++) { const a = (i / 9) * Math.PI * 2, d = new THREE.Mesh(new THREE.SphereGeometry(0.008, 6, 4), hatMat(0xffffff)); d.position.set(Math.cos(a) * 0.1, 0.012, Math.sin(a) * 0.1); hat.add(d); }
+      const strap = new THREE.Mesh(new THREE.TorusGeometry(0.113, 0.004, 4, 24), hatMat(0xffffff)); strap.rotation.x = Math.PI / 2; strap.position.y = 0.005; hat.add(strap);
+    } else if (opts.hat === 'beanie') {
+      const hat = new THREE.Group(); hat.position.set(0, 0.16, 0.02); h.add(hat);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.15, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2), hatMat(0x3f78c8)); cap.position.y = 0.0; hat.add(cap);
+      const cuff = new THREE.Mesh(new THREE.TorusGeometry(0.148, 0.026, 8, 24), hatMat(0xf2c230)); cuff.rotation.x = Math.PI / 2; cuff.position.y = 0.004; hat.add(cuff);
+      hat.add(sph(0.04, hatMat(0xffffff), 0, 0.15, 0));
+    } else if (opts.hat === 'propeller') {
+      const hat = new THREE.Group(); hat.position.set(0, 0.17, 0.02); h.add(hat);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), hatMat(0xe0453a)); hat.add(dome);
+      for (let i = 0; i < 4; i++) { const p = new THREE.Mesh(new THREE.CircleGeometry(0.1, 8, i * Math.PI / 2, Math.PI / 3), new THREE.MeshStandardMaterial({ color: [0xffd23a, 0x4fd0ff][i % 2], side: THREE.DoubleSide })); p.rotation.x = -Math.PI / 2; p.position.y = 0.095; hat.add(p); }
+      const rotor = new THREE.Group(); rotor.position.y = 0.105;
+      for (let i = 0; i < 2; i++) { const blade = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.006, 0.04), hatMat(i ? 0xffd23a : 0x4fd0ff)); blade.rotation.y = i * Math.PI / 2; rotor.add(blade); }
+      rotor.add(sph(0.014, hatMat(0xffffff), 0, 0.005, 0)); hat.add(rotor); this.spinners.push(rotor);
+    }
     h.visible = opts.head !== false;
 
     // ---- body (follows the head's yaw, hangs under it) ----
@@ -100,6 +127,19 @@ export class PlayerModel {
     this.glow = new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), new THREE.MeshStandardMaterial({ color: 0xff9b3a, emissive: 0xff7a1a, emissiveIntensity: 1.5 }));
     this.glow.position.set(0, -0.53, 0.16); b.add(this.glow);
 
+    // badge on the chest
+    if (opts.badge === 'og' || opts.badge === 'star') {
+      const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d')!;
+      if (opts.badge === 'og') {
+        g.fillStyle = '#e8b830'; g.beginPath(); g.arc(64, 64, 62, 0, 7); g.fill(); g.fillStyle = '#fff3b0'; g.beginPath(); g.arc(64, 64, 52, 0, 7); g.fill();
+        g.fillStyle = '#1c1200'; g.font = 'bold 66px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('OG', 64, 70);
+      } else {
+        g.fillStyle = '#e8b830'; g.beginPath(); for (let i = 0; i < 10; i++) { const r = i % 2 ? 26 : 60, a = -Math.PI / 2 + (i * Math.PI) / 5; g.lineTo(64 + Math.cos(a) * r, 66 + Math.sin(a) * r); } g.closePath(); g.fill();
+      }
+      const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+      const badge = new THREE.Mesh(new THREE.CircleGeometry(0.042, 24), new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.4, metalness: 0.3 }));
+      badge.position.set(-0.062, -0.238, -0.1315); badge.rotation.y = Math.PI; b.add(badge);
+    }
     // chest emblem, collar, shoulder pads, belt gear
     const emblem = new THREE.Mesh(new THREE.CircleGeometry(0.035, 16), accent); emblem.position.set(0.055, -0.235, -0.1295); emblem.rotation.y = Math.PI; b.add(emblem);
     b.add(sph(0.012, pale, 0.055, -0.235, -0.131));
@@ -163,6 +203,7 @@ export class PlayerModel {
   /** Put the model where the player is. `head` is eye position, `yaw` the head's heading; hands are world positions. */
   setPose(head: THREE.Vector3, yaw: number, pitch: number, roll: number, left: THREE.Vector3, right: THREE.Vector3, dt: number): void {
     this.t += dt;
+    for (const sp of this.spinners) sp.rotation.y += dt * 18;
     this.headG.position.copy(head);
     this.headG.rotation.set(pitch, yaw, roll, 'YXZ');
     this.bodyG.position.copy(head); this.bodyG.rotation.set(0, yaw, 0);

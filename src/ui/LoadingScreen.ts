@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Screen } from './Screen';
 import { PlayerModel } from '../world/PlayerModel';
+import type { Look } from '../game/Cosmetics';
 
 /** Ordinary tips, and a few rare ones that turn up now and then. */
 export const TIPS: string[] = [
@@ -64,7 +65,7 @@ export class LoadingScreen {
   private t = 0;
   private ctxd = false;
 
-  constructor(color: number) {
+  constructor(private look: Look) {
     this.scene.background = new THREE.Color(0x05070d);
     this.scene.add(new THREE.HemisphereLight(0xcfd8ff, 0x302040, 1.6));
     const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(-1, 2, 2); this.scene.add(key);
@@ -79,13 +80,21 @@ export class LoadingScreen {
     plate.rotation.x = -Math.PI / 2; plate.position.set(-0.7, -0.62, -1.9); this.root.add(plate);
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.58, 0.62, 48), new THREE.MeshBasicMaterial({ color: 0xffb347 })); ring.rotation.x = -Math.PI / 2; ring.position.copy(plate.position).add(new THREE.Vector3(0, 0.002, 0)); this.root.add(ring);
     // the pioneer, standing and waving
-    this.model = new PlayerModel(color);
-    this.figure.add(this.model.group);
+    this.model = this.makeModel();
     this.figure.scale.setScalar(1.15); this.figure.position.set(-0.7, -0.02, -1.9);
     this.root.add(this.figure);
     this.panel.mesh.position.set(0.55, 0.05, -1.9); this.root.add(this.panel.mesh);
     this.scene.add(this.root);
   }
+
+  private makeModel(): PlayerModel {
+    const m = new PlayerModel(this.look.fur, { suit: this.look.suit, hat: this.look.hat, badge: this.look.badge });
+    this.figure.add(m.group);
+    return m;
+  }
+
+  /** Your look changed: rebuild the picture. */
+  setLook(look: Look): void { this.look = look; this.figure.remove(this.model.group); this.model = this.makeModel(); }
 
   show(): void {
     this.active = true; this.shownFor = 0; this.tip = pickTip(); this.tipT = 0; this.ctxd = false; this.draw();

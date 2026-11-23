@@ -14,7 +14,7 @@ class Avatar {
 
   constructor(info: PlayerInfo) {
     this.info = info;
-    this.model = new PlayerModel(info.color);
+    this.model = new PlayerModel(info.color, { suit: info.look?.suit, hat: info.look?.hat, badge: info.look?.badge });
     const c = document.createElement('canvas'); c.width = 256; c.height = 64;
     const g = c.getContext('2d')!; g.fillStyle = 'rgba(8,12,24,0.7)'; g.fillRect(0, 0, 256, 64);
     g.fillStyle = '#fff'; g.font = 'bold 28px monospace'; g.textAlign = 'center'; g.fillText(info.name, 128, 42);
