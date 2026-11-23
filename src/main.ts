@@ -604,6 +604,8 @@ async function boot() {
     if (buildActive) { buildPress(); return; }
     if (placing) tryPlace();
   };
+  const wristHud: (THREE.Mesh | null)[] = [null, null];
+  const tmpHud = new THREE.Vector3(), hudLift = new THREE.Vector3(0, 0.17, 0.07);   // grip-local: up off the glove, a little toward you
   rays.forEach((r, i) => {
     rig.add(r); rig.add(grips[i]);
     r.addEventListener('connected', e => {
@@ -611,7 +613,11 @@ async function boot() {
       const hand = inputs[i]?.handedness;
       // wrist displays: resources on the left, objective on the right
       const hud = hand === 'left' ? resourceHud.mesh : hand === 'right' ? objectiveHud.mesh : null;
-      if (hud) { hud.rotation.x = -Math.PI / 2 + 0.35; hud.position.set(0, 0.04, 0.05); grips[i].add(hud); }
+      if (hud) {
+        hud.rotation.x = -Math.PI / 2 + 0.35; grips[i].add(hud); wristHud[i] = hud;
+        // always draw over your own glove and arm, never behind them
+        const mat = hud.material as THREE.MeshBasicMaterial; mat.depthTest = false; hud.renderOrder = 30;
+      }
     });
     r.addEventListener('disconnected', () => { inputs[i] = null; });
     r.addEventListener('selectstart', () => press(i));
@@ -959,6 +965,12 @@ async function boot() {
       const hq = camera.getWorldQuaternion(new THREE.Quaternion()), he = new THREE.Euler().setFromQuaternion(hq, 'YXZ');
       selfModel.setPose(new THREE.Vector3().copy(player.position).add(camera.position), he.y, he.x, he.z, player.hands[0].world, player.hands[1].world, dt);
     }
+    // wrist displays ride above your glove (not on the raw controller), clear of the fist and sleeve
+    player.hands.forEach((h, i) => {
+      const hud = wristHud[i]; if (!hud || !inXR) return;
+      grips[i].updateWorldMatrix(true, false);
+      hud.position.copy(grips[i].worldToLocal(tmpHud.copy(h.world))).add(hudLift);
+    });
     player.hands.forEach((h, i) => {
       if (h.touching && !hadTouch[i]) buzz(i, 0.35, 25);
       hadTouch[i] = h.touching;
