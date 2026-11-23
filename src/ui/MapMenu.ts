@@ -123,8 +123,14 @@ export class MapMenu extends Screen {
     for (const a of planet.creatures) { if (a.group.visible) ctx.fillRect(X(a.group.position.x) - 1.5, Y(a.group.position.z) - 1.5, 3, 3); }
     if (this.showOre) {
       const col: Record<string, string> = { copper: '#e08a3c', iron: '#8fa6c8', gold: '#ffd23a', plasma: '#d27aff' };
-      for (const o of planet.oreMarks) { const sx = X(o.x), sy = Y(o.z); ctx.fillStyle = col[o.type]; ctx.beginPath(); ctx.arc(sx, sy, 4, 0, 7); ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.stroke(); }
+      for (const o of planet.oreMarks) {   // ring shows rarity: grey impure, black normal, bright gold pure (and bigger)
+        const sx = X(o.x), sy = Y(o.z), pure = o.purity >= 2;
+        ctx.fillStyle = col[o.type]; ctx.beginPath(); ctx.arc(sx, sy, pure ? 6 : 4, 0, 7); ctx.fill();
+        ctx.strokeStyle = pure ? '#ffe27a' : o.purity < 1 ? '#8a8a8a' : '#000'; ctx.lineWidth = pure ? 2.5 : 1.5; ctx.stroke();
+      }
     }
+    ctx.strokeStyle = '#f0e8ff'; ctx.lineWidth = 3;   // giant arches
+    for (const [x, z, r] of planet.marks.arches) { ctx.beginPath(); ctx.arc(X(x), Y(z), Math.max(5, r * k), Math.PI, 0); ctx.stroke(); }
     const hub = planet.hub;
     if (hub) { ctx.save(); ctx.translate(X(hub.pose.x), Y(hub.pose.z)); ctx.rotate(-hub.pose.yaw); ctx.fillStyle = '#b8c4d8'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; const w = Math.max(8, 12.4 * k), d = Math.max(5, 5.4 * k); ctx.fillRect(-w / 2, -d / 2, w, d); ctx.strokeRect(-w / 2, -d / 2, w, d); ctx.restore(); }
     for (const pr of planet.props) { ctx.fillStyle = pr.kind === 'campfire' ? '#ff8a30' : '#6ff0ff'; ctx.beginPath(); ctx.arc(X(pr.x), Y(pr.z), 5, 0, 7); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }

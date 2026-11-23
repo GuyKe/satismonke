@@ -1,6 +1,6 @@
 export type Ore = 'copper' | 'iron' | 'gold' | 'plasma' | 'uranium';
 export const ORES: Ore[] = ['copper', 'iron', 'gold', 'plasma', 'uranium'];
-export type Res = 'wood' | 'stone' | 'steel' | 'crystal' | Ore | 'plate' | 'wire' | 'token' | 'core' | 'drive' | 'artifact';
+export type Res = 'wood' | 'biomass' | 'stone' | 'steel' | 'crystal' | Ore | 'plate' | 'wire' | 'token' | 'core' | 'drive' | 'artifact';
 export type Cost = Partial<Record<Res, number>>;
 export type RecipeId = 'hub' | 'campfire' | 'pickaxe' | 'axe' | 'lantern' | 'gloves' | 'sticky' | 'floatcore' | 'crystalgloves' | 'lamp' | 'ironpick' | 'copperlantern' | 'scanner' | 'plasmacore'
   | 'steelbar' | 'pole' | 'powerline' | 'burner' | 'miner' | 'smelter' | 'constructor' | 'storage' | 'solar' | 'conveyor'
@@ -123,7 +123,7 @@ export const RECIPES: Recipe[] = [
     cost: { drive: 1, plate: 8, crystal: 2 }, unlocked: p => p.has('lab'), lockedHint: () => 'Build the Research Lab' },
 ];
 
-const label: Record<Res, string> = { uranium: 'uranium', token: 'token', core: 'core', drive: 'drive', artifact: 'artifact', wood: 'wood', stone: 'stone', steel: 'steel', crystal: 'crystal', copper: 'copper', iron: 'iron', gold: 'gold', plasma: 'plasma', plate: 'plate', wire: 'wire' };
+const label: Record<Res, string> = { biomass: 'biomass', uranium: 'uranium', token: 'token', core: 'core', drive: 'drive', artifact: 'artifact', wood: 'wood', stone: 'stone', steel: 'steel', crystal: 'crystal', copper: 'copper', iron: 'iron', gold: 'gold', plasma: 'plasma', plate: 'plate', wire: 'wire' };
 
 export interface ProgressData {
   items: Record<Res, number>; mined: Record<Ore, number>; totalWood: number; totalCrystal: number; treesFelled: number; bouldersBroken: number;
@@ -132,7 +132,7 @@ export interface ProgressData {
 
 /** Inventory, unlock counters and the objective text. In-memory only (not saved yet). */
 export class Progress {
-  items: Record<Res, number> = { uranium: 0, token: 0, core: 0, drive: 0, artifact: 0, wood: 0, stone: 0, steel: 0, crystal: 0, copper: 0, iron: 0, gold: 0, plasma: 0, plate: 0, wire: 0 };
+  items: Record<Res, number> = { biomass: 0, uranium: 0, token: 0, core: 0, drive: 0, artifact: 0, wood: 0, stone: 0, steel: 0, crystal: 0, copper: 0, iron: 0, gold: 0, plasma: 0, plate: 0, wire: 0 };
   /** Factory progress */
   links = 0;
   /** Power lines you have strung (for the objectives). */

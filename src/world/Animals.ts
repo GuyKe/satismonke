@@ -543,6 +543,31 @@ function serpent(rng: Rng): Animal {
     tick(t) { segs.forEach((s, i) => { s.position.y = Math.sin(t * 1.6 - i * 0.75 + ph) * 0.95 - 0.1; s.position.x = Math.sin(t * 1.0 - i * 0.5 + ph) * 0.35; }); } };
 }
 
+/** The puffhog: a round, gentle grazer with a big fluffy tail. The common wildlife of the open fields, harmless and easy to handle. */
+function puffhog(rng: Rng): Animal {
+  const tones: [number, number, number][] = [[0xe8b8c8, 0xfff0f6, 0x8a5a6a], [0xc8d8a8, 0xf4ffe0, 0x5a7a4a], [0xd8c0f0, 0xf6eeff, 0x6a5a8a], [0xf0d098, 0xfff6dc, 0x8a6a3a]];
+  const [main, tail, dark] = pick(rng, tones), g = new THREE.Group();
+  const b = new Builder();
+  b.add(S(0.62, 12, 9), main, { p: [0, 0.62, 0], s: [1.0, 0.9, 1.3] })
+   .add(S(0.4, 10, 8), tail, { p: [0, 0.38, 0.05], s: [1.1, 0.6, 1.2] });                        // pale belly
+  // the fluffy tail: a ball of fluff with little tufts
+  b.add(S(0.34, 12, 9), tail, { p: [0, 0.78, -0.88] });
+  for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2; b.add(S(0.14, 6, 5), tail, { p: [Math.cos(a) * 0.3, 0.78 + Math.sin(a) * 0.3, -0.92] }); }
+  b.into(g);
+  const legs = [[-0.32, 0.4], [0.32, -0.4], [0.32, 0.4], [-0.32, -0.4]].map(([x, z]) => limb(g, [x, 0.34, z], lb => legBuild(lb, main, dark, 0.34, 0.1, 0.12)));
+  const head = limb(g, [0, 0.75, 0.78], hb => {
+    hb.add(S(0.38, 12, 9), main, { s: [1, 0.95, 1] })
+      .add(S(0.2, 10, 8), tail, { p: [0, -0.1, 0.3], s: [1.2, 0.8, 1] })                       // snout
+      .add(S(0.045, 6, 5), dark, { p: [-0.07, -0.08, 0.48] }).add(S(0.045, 6, 5), dark, { p: [0.07, -0.08, 0.48] })
+      .add(S(0.12, 6, 5), main, { p: [-0.26, 0.32, -0.02], s: [0.8, 1.1, 0.5] }).add(S(0.12, 6, 5), main, { p: [0.26, 0.32, -0.02], s: [0.8, 1.1, 0.5] });
+    eyes(hb, [[-0.17, 0.1, 0.3, 0.06], [0.17, 0.1, 0.3, 0.06]]);
+  });
+  const ph = rng() * 6;
+  return { ...base(), mood: 'friendly', head, yawOnly: false, name: 'puffhog', group: g, speed: 0.9, flying: false, hover: 0, heading: 0, turn: 0, turnBias: 0,
+    tick(t) { legs.forEach((l, i) => { l.rotation.x = Math.sin(t * 4.5 + (i % 2 ? Math.PI : 0) + ph) * 0.5; }); head.rotation.x = Math.sin(t * 0.8 + ph) * 0.08; return Math.abs(Math.sin(t * 4.5 + ph)) * 0.04; } };
+}
+
+export const makePuffhog = (rng: Rng): Animal => puffhog(rng);
 export const GROUND = [longneck, stilter, worm, hopper, crawler, bulbhog, shellwalker, spinner, antlerback];
 export const FLYING = [floater, manta, bird, buzzer, moth, wisp];
 export const WATERFOLK = [glowfish, serpent];

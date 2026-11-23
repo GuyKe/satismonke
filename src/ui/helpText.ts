@@ -25,9 +25,10 @@ export const HOWTO_LINES = [
 
 /** Where to find every resource (the FIND RESOURCES page). */
 export const RESOURCE_GUIDE: { name: string; color: string; lines: [string, string] }[] = [
+  { name: 'BIOMASS', color: '#7fe05a', lines: ['Punch bushes (3 each) or fell trees (2 leaves). Burners take', '10 biomass for 80 s of power. Bushes grow back after 5 min.'] },
   { name: 'WOOD', color: '#e8b27a', lines: ['Trees all over the plains. Grip + punch a trunk twice', '(once with a Stone Axe). Burn it in a Biomass Burner.'] },
   { name: 'STONE', color: '#c0c4d0', lines: ['Round grey boulders on the plains. Grip + punch them', 'three times (fewer with a pickaxe).'] },
-  { name: 'IRON', color: '#8fa6c8', lines: ['Dark rocks with blue-grey crystals, in small veins', 'across the plains. Put a Miner on one to automate it.'] },
+  { name: 'IRON', color: '#8fa6c8', lines: ['Dark rocks with blue-grey crystals, in small veins. Impure', 'nodes give 2, normal 3, pure (gold gem above) 4. Pure: crater rim.'] },
   { name: 'COPPER', color: '#e08a3c', lines: ['Dark rocks with orange crystals, in veins on the', 'plains. Same as iron: punch it or mine it with a Miner.'] },
   { name: 'STEEL', color: '#8fc3ff', lines: ['Smash your own crashed pod, or open other crashed', 'pods: red blinking lights, red triangles on the map.'] },
   { name: 'CRYSTAL', color: '#6fe8ff', lines: ['The tall glowing spires in clusters. Grip + punch them', 'twice. Pods sometimes hold a few too.'] },

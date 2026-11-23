@@ -4,7 +4,7 @@ import { CollisionWorld } from './physics/CollisionWorld';
 import { GorillaPlayer } from './player/GorillaPlayer';
 import { ArmCalibration } from './player/ArmCalibration';
 import { buildCapsule } from './world/Capsule';
-import { Planet, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER, ORE_OWNER, MACHINE_OWNER, CRASH_OWNER, Loot, Harvest } from './world/Planet';
+import { Planet, BUSH_OWNER, POD_OWNER, BOULDER_OWNER, CRYSTAL_OWNER, ORE_OWNER, MACHINE_OWNER, CRASH_OWNER, Loot, Harvest } from './world/Planet';
 import { BuildSystem, BuildState, Plan, Piece, PieceType, PALETTE, COST as BUILD_COST, COLOR_COST, geometry as pieceGeometry } from './world/BuildSystem';
 import { BuildPanel } from './ui/BuildPanel';
 import { Narrator, LINES, Line } from './ui/Narrator';
@@ -67,6 +67,7 @@ async function boot() {
   const debugSkip = new URLSearchParams(location.search).get('skip'); // ?skip=planet jumps straight there
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.localClippingEnabled = true;   // the south void has no sea over it
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.1;
@@ -266,10 +267,11 @@ async function boot() {
     pl.onTreeLanded = pos => sfx.thump(pos);
     pl.onHarvest = (k, i) => net.sendWorld(k, i);
     pl.onRespawn = (k, i) => net.forgetWorld(k, i);
-    pl.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); progress.treesFelled++; sfx.pickup(); toast(`+${k} wood`, pos); first('firstWood'); if (progress.treesFelled % 6 === 0) chat('chop', 40, true); if (progress.items.wood >= 50) first('milestoneWood'); };
+    pl.onWood = (n, pos) => { const k = n + (progress.has('axe') ? 1 : 0); progress.add('wood', k); progress.treesFelled++; progress.add('biomass', 2); sfx.pickup(); toast(`+${k} wood, +2 biomass`, pos); first('firstWood'); if (progress.treesFelled % 6 === 0) chat('chop', 40, true); if (progress.items.wood >= 50) first('milestoneWood'); };
     pl.onStone = (n, pos) => { const k = n + (progress.has('ironpick') ? 2 : progress.has('pickaxe') ? 1 : 0); progress.add('stone', k); progress.bouldersBroken++; sfx.crumble(); toast(`+${k} stone`, pos); first('firstStone'); if (progress.bouldersBroken % 5 === 0) chat('rock', 40, true); };
     pl.onCrystal = (n, pos) => { progress.add('crystal', n); sfx.crumble(); sfx.pickup(); toast(`+${n} crystal`, pos); first('firstCrystal'); };
-    pl.onOre = (type, n, pos) => { progress.add(type, n); progress.mined[type]++; sfx.crumble(); sfx.pickup(); toast(`+${n} ${type}`, pos); first('firstOre'); const ok = 'ore' + type.charAt(0).toUpperCase() + type.slice(1); if (D[ok]) first(ok); };
+    pl.onBiomass = (n, pos) => { progress.add('biomass', n); sfx.pickup(); toast(`+${n} biomass`, pos); first('firstBiomass'); };
+    pl.onOre = (type, n, pos, purity) => { progress.add(type, n); progress.mined[type]++; sfx.crumble(); sfx.pickup(); toast(`+${n} ${type} (${purity >= 2 ? 'pure' : purity < 1 ? 'impure' : 'normal'} node)`, pos); first('firstOre'); const ok = 'ore' + type.charAt(0).toUpperCase() + type.slice(1); if (D[ok]) first(ok); };
     pl.onPodDestroyed = pos => { progress.podDestroyed = true; progress.podHits = POD_HITS; progress.add('steel', POD_STEEL); sfx.crumble(); toast(`+${POD_STEEL} steel`, pos); say('podSmashed'); };
     pl.onLoot = (_i: number, loot: Loot, pos: THREE.Vector3) => {
       const parts: string[] = [];
@@ -616,7 +618,7 @@ async function boot() {
     onToggleMic: () => toggleMic(),
     inventory: () => {
       const it = progress.items;
-      const rows: [string, keyof typeof it, string][] = [['WOOD', 'wood', '#e8b27a'], ['STONE', 'stone', '#c0c4d0'], ['STEEL', 'steel', '#8fc3ff'], ['CRYSTAL', 'crystal', '#6fe8ff'], ['COPPER', 'copper', '#e08a3c'],
+      const rows: [string, keyof typeof it, string][] = [['WOOD', 'wood', '#e8b27a'], ['BIOMASS', 'biomass', '#7fe05a'], ['STONE', 'stone', '#c0c4d0'], ['STEEL', 'steel', '#8fc3ff'], ['CRYSTAL', 'crystal', '#6fe8ff'], ['COPPER', 'copper', '#e08a3c'],
         ['IRON', 'iron', '#8fa6c8'], ['GOLD', 'gold', '#ffd23a'], ['PLASMA', 'plasma', '#d27aff'], ['URANIUM', 'uranium', '#7dff5a'], ['PLATE', 'plate', '#e0e6f0'],
         ['WIRE', 'wire', '#ff9040'], ['TOKEN', 'token', '#ffd45a'], ['CORE', 'core', '#ff7aa0'], ['DRIVE', 'drive', '#7affb0'], ['ARTIFACT', 'artifact', '#c04dff']];
       return rows.map(([label, k, color]) => ({ label, value: it[k], color }));
@@ -870,6 +872,10 @@ async function boot() {
       if (progress.items.wood < 5) { sfx.fail(); toast('Need 5 wood', at); return; }
       progress.items.wood -= 5;
       ask({ k: 'fuel', id }, () => { progress.fueled = true; sfx.pickup(); toast('+5 wood of fuel', at); }, () => { progress.items.wood += 5; });
+    } else if (action === 'fuelbio') {
+      if (progress.items.biomass < 10) { sfx.fail(); toast('Need 10 biomass', at); return; }
+      progress.items.biomass -= 10;
+      ask({ k: 'fuel', id, bio: true }, () => { progress.fueled = true; sfx.pickup(); toast('+10 biomass of fuel', at); }, () => { progress.items.biomass += 10; });
     } else if (action === 'take') {
       ask({ k: 'take', id }, r => giveItems((r.items ?? {}) as Record<string, number>, at));
     } else {
@@ -895,6 +901,9 @@ async function boot() {
     if (action === 'fuel') {
       if (progress.items.wood < 5) { sfx.fail(); toast('Need 5 wood', at); return; }
       progress.items.wood -= 5; factory.addFuel(id, 5); markFactory(); progress.fueled = true; sfx.pickup(); toast('+5 wood of fuel', at);
+    } else if (action === 'fuelbio') {
+      if (progress.items.biomass < 10) { sfx.fail(); toast('Need 10 biomass', at); return; }
+      progress.items.biomass -= 10; factory.addFuel(id, 4); markFactory(); progress.fueled = true; sfx.pickup(); toast('+10 biomass of fuel', at);
     } else if (action === 'take') {
       const got = factory.takeAll(id); markFactory(); giveItems(got, at);
     } else {
@@ -945,7 +954,7 @@ async function boot() {
         if (typeof res === 'string') return { ok: false, msg: res };
         addWireView(res); markFactory(); return { ok: true };
       }
-      case 'fuel': if (!factory.addFuel(n('id'), 5)) return { ok: false, msg: 'That does not burn wood' }; markFactory(); return { ok: true };
+      case 'fuel': if (!factory.addFuel(n('id'), op.bio ? 4 : 5)) return { ok: false, msg: 'That does not burn wood' }; markFactory(); return { ok: true };
       case 'take': { const items = factory.takeAll(n('id')); markFactory(); return { ok: true, items }; }
       case 'tokens': { const tokens = factory.takeTokens(); markFactory(); return { ok: true, tokens }; }
       case 'reset': factory.resetBreaker(); markFactory(); return { ok: true };
@@ -1064,7 +1073,11 @@ async function boot() {
     const headNow = new THREE.Vector3().copy(player.position).add(camera.position);
     if (appMode === 'menu' && (headNow.y < -2 || Math.abs(headNow.x) > 9.5 || Math.abs(headNow.z) > 9.5 || headNow.y > 16)) player.teleport(MENU_SPAWN);
     else if (appMode === 'game' && ship.visible && (headNow.y < -8 || headNow.length() > 14)) player.teleport(SPAWN);
-    else if (appMode === 'game' && planet && !ship.visible && headNow.y < -60) player.teleport(new THREE.Vector3(0, 3, 0));
+    else if (appMode === 'game' && planet && !ship.visible && headNow.y < -60) {   // fell into the void (or somehow out of the world)
+      const hubP = planet.hub?.pose;
+      player.teleport(hubP ? toWorld([0, 0.95, 0], hubP) : new THREE.Vector3(0, 3, 0));
+      if (planet.map.voidZ !== undefined) { health.hurt(20); sfx.hurt(); toast('You fell into the void: -20 HP', headPos()); chat('voidFall', 20); }
+    }
 
     // Hazards: poison clouds, radiation and hard landings
     const gear: Gear = { mask: progress.has('gasmask'), hazmat: progress.has('hazmat'), boots: progress.has('bladerunners') };
@@ -1094,6 +1107,11 @@ async function boot() {
         if (!h.started || !gripDown[i]) return;
         const id = player.world.ownerAt(h.contact);
         if (id < 0) return;
+        if (id >= BUSH_OWNER) { // a bush: one punch for biomass
+          if (h.impact < 1.4) return;
+          if (planet!.hitBush(id - BUSH_OWNER)) { sfx.thump(h.contact); buzz(i, 0.5, 40); }
+          return;
+        }
         if (id >= CRASH_OWNER) { // a crashed pod: three punches to open it
           if (h.impact < 2.0) return;
           const left = planet!.hitSite(id - CRASH_OWNER); if (left) sfx.clink(); buzz(i, 1, 90); return;

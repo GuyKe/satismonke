@@ -3,7 +3,7 @@ import { Screen } from './Screen';
 import { Factory, Machine, MACHINE_NAME, ITEM_NAME, ItemType, STORAGE_CAP, SLOT_NAMES, MAX_CLOCK, ITEM_VALUE, POLE_PORTS } from '../game/Factory';
 
 const W = 640, H = 470;
-export type MachineAction = 'fuel' | 'take' | 'remove' | 'overclock' | 'reset' | 'tokens' | 'filter' | 'unwire';
+export type MachineAction = 'fuel' | 'take' | 'remove' | 'overclock' | 'reset' | 'tokens' | 'filter' | 'unwire' | 'fuelbio';
 
 interface Btn { label: string; action: MachineAction; x: number; y: number; w: number; h: number; arg?: number; danger?: boolean }
 
@@ -74,7 +74,7 @@ export class MachinePanel extends Screen {
     const list = (b: Partial<Record<ItemType, number>>) => (Object.keys(b) as ItemType[]).filter(k => (b[k] ?? 0) > 0).map(k => `${b[k]} ${ITEM_NAME[k]}`).join(', ') || '-';
     this.btns = [];
     const row2 = 396;
-    if (m.kind === 'burner') lines.push(`Fuel: ${m.fuel.toFixed(1)} wood  (1 wood = 20 s)`, `Makes 1.0 MW`);
+    if (m.kind === 'burner') lines.push(`Fuel: ${m.fuel.toFixed(1)} wood  (1 wood = 20 s, 10 biomass = 80 s)`, `Makes 1.0 MW`);
     else if (m.kind === 'solar') lines.push(`Makes up to 0.6 MW, by day`);
     else if (m.kind === 'pole') lines.push(`Power lines: ${lines0} / ${POLE_PORTS}`, `Wire it to a burner and to machines`);
     else if (m.kind === 'storage') lines.push(`Holds: ${list(m.stored)}`, `Capacity ${STORAGE_CAP}`);
@@ -100,7 +100,7 @@ export class MachinePanel extends Screen {
     const add = (label: string, action: MachineAction, w = 180, danger = false, short = label) => { specs.push({ label, short, action, w, danger }); };
     if (net.tripped) add('RESET BREAKER', 'reset', 250, false, 'RESET');
     if (lines0 > 0 && !f.legacyGrid) add('CUT LINES', 'unwire', 170, false, 'CUT');
-    if (m.kind === 'burner') add('+5 WOOD', 'fuel', 180, false, '+WOOD');
+    if (m.kind === 'burner') { add('+5 WOOD', 'fuel', 180, false, '+WOOD'); add('+10 BIOMASS', 'fuelbio', 200, false, '+BIO'); }
     if (m.kind === 'storage') add('TAKE ALL', 'take');
     if (m.kind === 'sink') add(`TOKENS ${f.tokens}`, 'tokens');
     if (['miner', 'smelter', 'constructor', 'sink'].includes(m.kind) && this.canOverclock() && m.clock < MAX_CLOCK) add('+CORE', 'overclock', 130);
